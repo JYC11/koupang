@@ -1,13 +1,10 @@
 use crate::users::dtos::{UserCreateReq, UserUpdateReq};
 use crate::users::entities::UserEntity;
 use chrono::Utc;
-use shared::db::{PgExec, PgPool, PgTx};
+use shared::db::PgExec;
 use shared::errors::AppError;
 use sqlx::PgConnection;
 use uuid::Uuid;
-
-#[derive(Clone)]
-pub struct UserRepository {}
 
 pub async fn get_user_by_id<'e>(
     executor: impl PgExec<'e>,
@@ -34,13 +31,10 @@ pub async fn get_user_by_username<'e>(
 }
 
 pub async fn create_user(tx: &mut PgConnection, req: UserCreateReq) -> Result<(), AppError> {
-    let id = Uuid::new_v4();
-
     sqlx::query(
-        "INSERT INTO users (id, username, password, email, phone, role) 
-             VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO users (username, password, email, phone, role) 
+             VALUES ($1, $2, $3, $4, $5)",
     )
-    .bind(id)
     .bind(&req.username)
     .bind(&req.password)
     .bind(&req.email)
