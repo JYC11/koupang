@@ -1,6 +1,6 @@
 use crate::users::entities::UserEntity;
 use serde::{Deserialize, Serialize};
-use shared::auth::Tokens;
+use shared::auth::jwt::Tokens;
 use shared::errors::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

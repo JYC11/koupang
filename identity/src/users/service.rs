@@ -7,7 +7,7 @@ use crate::users::repository::{
 };
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use shared::auth::{JwtService, Tokens};
+use shared::auth::jwt::{JwtService, Tokens};
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::db::transaction_support::with_transaction;
