@@ -4,9 +4,9 @@ pub struct DbConfig {
 }
 
 impl DbConfig {
-    pub fn new() -> Self {
+    pub fn new(db_url_key: &str) -> Self {
         Self {
-            url: std::env::var("DB_URL").unwrap(),
+            url: std::env::var(db_url_key).unwrap(),
             max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .unwrap()
                 .parse()
