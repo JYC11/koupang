@@ -9,10 +9,22 @@ pub struct AuthConfig {
 impl AuthConfig {
     pub fn new() -> Self {
         Self {
-            access_token_secret: std::env::var("ACCESS_TOKEN_SECRET").unwrap().as_bytes().to_vec(),
-            refresh_token_secret: std::env::var("REFRESH_TOKEN_SECRET").unwrap().as_bytes().to_vec(),
-            access_token_expiry_secs: std::env::var("ACCESS_TOKEN_EXPIRY").unwrap().parse().unwrap(),
-            refresh_token_expiry_secs: std::env::var("REFRESH_TOKEN_EXPIRY").unwrap().parse().unwrap(),
+            access_token_secret: std::env::var("ACCESS_TOKEN_SECRET")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            refresh_token_secret: std::env::var("REFRESH_TOKEN_SECRET")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            access_token_expiry_secs: std::env::var("ACCESS_TOKEN_EXPIRY")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            refresh_token_expiry_secs: std::env::var("REFRESH_TOKEN_EXPIRY")
+                .unwrap()
+                .parse()
+                .unwrap(),
         }
     }
 
