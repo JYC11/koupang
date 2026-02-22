@@ -93,3 +93,7 @@ pub async fn delete_user(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError
 
     Ok(())
 }
+
+mod tests {
+    // TODO
+}

@@ -183,3 +183,7 @@ fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
         ))),
     }
 }
+
+mod tests {
+    // TODO
+}
