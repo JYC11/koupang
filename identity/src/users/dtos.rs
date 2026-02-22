@@ -1,6 +1,6 @@
 use crate::users::entities::UserEntity;
 use serde::{Deserialize, Serialize};
-use shared::auth::jwt::Tokens;
+use shared::auth::jwt::JwtTokens;
 use shared::errors::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +55,7 @@ pub struct UserLoginReq {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UserLoginRes {
-    Success(Tokens),
+    Success(JwtTokens),
     Failure(AppError),
 }
 

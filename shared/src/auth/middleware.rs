@@ -1,0 +1,167 @@
+use axum::{extract::FromRequestParts, http::request::Parts};
+use axum::{
+    extract::Request,
+    http::{HeaderMap, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use std::sync::Arc;
+use tokio;
+use uuid::Uuid;
+
+use crate::auth::jwt::{AccessTokenClaims, AuthError, CurrentUser, JwtService};
+use crate::errors::AppError;
+
+pub trait GetCurrentUser: Send + Sync {
+    // need to make this async somehow...
+    fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError>;
+}
+
+#[derive(Clone)]
+pub struct AuthMiddleware {
+    jwt_service: Arc<JwtService>,
+    current_user_getter: Arc<dyn GetCurrentUser>,
+}
+
+impl AuthMiddleware {
+    pub fn new(jwt_service: Arc<JwtService>, current_user_getter: Arc<dyn GetCurrentUser>) -> Self {
+        Self {
+            jwt_service,
+            current_user_getter,
+        }
+    }
+
+    /// Middleware handler function
+    pub async fn handle(
+        self,
+        mut req: Request,
+        next: Next,
+    ) -> Result<Response, AuthMiddlewareError> {
+        // 1. Extract Authorization header
+        let headers = req.headers();
+        let token = extract_bearer_token(headers)?;
+
+        // 2. Validate and decode JWT
+        let claims = self
+            .jwt_service
+            .validate_access_token(token)
+            .map_err(|e| match e {
+                AuthError::TokenExpired => AuthMiddlewareError::TokenExpired,
+                AuthError::InvalidToken => AuthMiddlewareError::InvalidToken,
+                _ => AuthMiddlewareError::InvalidToken,
+            })?;
+
+        // 3. Fetch current user (blocking call)
+        let user_id = claims.sub;
+        let current_user = {
+            let getter = self.current_user_getter.clone();
+            tokio::task::spawn_blocking(move || getter.get_by_id(user_id))
+                .await
+                .map_err(|_| AuthMiddlewareError::InternalError)?
+                .map_err(|_| AuthMiddlewareError::UserNotFound)?
+        };
+
+        // 4. Store CurrentUser in request extensions
+        req.extensions_mut().insert(current_user);
+        req.extensions_mut().insert(claims);
+
+        // 5. Continue to next handler
+        Ok(next.run(req).await)
+    }
+}
+
+/// Extract Bearer token from Authorization header
+fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, AuthMiddlewareError> {
+    let auth_header = headers
+        .get("authorization")
+        .ok_or(AuthMiddlewareError::MissingAuthHeader)?
+        .to_str()
+        .map_err(|_| AuthMiddlewareError::InvalidAuthHeader)?;
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(AuthMiddlewareError::InvalidAuthHeader);
+    }
+
+    Ok(auth_header.trim_start_matches("Bearer ").trim())
+}
+
+#[derive(Debug)]
+pub enum AuthMiddlewareError {
+    InternalError,
+    MissingAuthHeader,
+    InvalidAuthHeader,
+    InvalidToken,
+    TokenExpired,
+    UserNotFound,
+}
+
+impl std::fmt::Display for AuthMiddlewareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMiddlewareError::InternalError => write!(f, "Internal error"),
+            AuthMiddlewareError::MissingAuthHeader => write!(f, "Missing Authorization header"),
+            AuthMiddlewareError::InvalidAuthHeader => {
+                write!(f, "Invalid Authorization header format")
+            }
+            AuthMiddlewareError::InvalidToken => write!(f, "Invalid token"),
+            AuthMiddlewareError::TokenExpired => write!(f, "Token has expired"),
+            AuthMiddlewareError::UserNotFound => write!(f, "User not found"),
+        }
+    }
+}
+
+impl std::error::Error for AuthMiddlewareError {}
+
+impl IntoResponse for AuthMiddlewareError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AuthMiddlewareError::InternalError => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+            }
+            AuthMiddlewareError::MissingAuthHeader => {
+                (StatusCode::UNAUTHORIZED, "Missing Authorization header")
+            }
+            AuthMiddlewareError::InvalidAuthHeader => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid Authorization header format",
+            ),
+            AuthMiddlewareError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
+            AuthMiddlewareError::TokenExpired => (StatusCode::UNAUTHORIZED, "Token has expired"),
+            AuthMiddlewareError::UserNotFound => {
+                (StatusCode::FORBIDDEN, "User not found or access denied")
+            }
+        };
+
+        (status, message).into_response()
+    }
+}
+
+// Extractor for handlers to easily get CurrentUser from request
+
+impl<S> FromRequestParts<S> for CurrentUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<CurrentUser>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "CurrentUser not found in request extensions",
+        ))
+    }
+}
+
+impl<S> FromRequestParts<S> for AccessTokenClaims
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<AccessTokenClaims>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AccessTokenClaims not found in request extensions",
+        ))
+    }
+}

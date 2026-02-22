@@ -1,17 +1,35 @@
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use thiserror::Error;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
 pub enum AppError {
+    #[error("Not found: {0}")]
     NotFound(String),
+    #[error("Unauthorized: {0}")]
     Forbidden(String),
+    #[error("Forbidden: {0}")]
     Unauthorized(String),
+    #[error("Already exists: {0}")]
     AlreadyExists(String),
+    #[error("Internal server error: {0}")]
     InternalServerError(String),
+    #[error("Bad request: {0}")]
+    BadRequest(String),
 }
 
-impl Display for AppError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::AlreadyExists(msg) => (StatusCode::CONFLICT, msg),
+        };
+
+        (status, message).into_response()
     }
 }

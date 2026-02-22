@@ -6,8 +6,10 @@ use crate::users::repository::{
     create_user, delete_user, get_user_by_id, get_user_by_username, update_user,
 };
 use argon2::password_hash::SaltString;
+use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use shared::auth::jwt::{JwtService, Tokens};
+use shared::auth::jwt::{CurrentUser, JwtService, JwtTokens};
+use shared::auth::middleware::GetCurrentUser;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::db::transaction_support::with_transaction;
@@ -16,7 +18,7 @@ use uuid::Uuid;
 
 pub struct UserService {
     pool: PgPool,
-    jwt_service: JwtService,
+    pub jwt_service: JwtService,
 }
 
 impl UserService {
@@ -108,7 +110,7 @@ impl UserService {
             .generate_refresh_token(&user.id)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
-        Ok(UserLoginRes::Success(Tokens {
+        Ok(UserLoginRes::Success(JwtTokens {
             access_token,
             refresh_token,
         }))
@@ -136,9 +138,28 @@ impl UserService {
     }
 }
 
+impl GetCurrentUser for UserService {
+    // todo make this cacheable in redis
+    fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError> {
+        let pool = self.pool.clone();
+
+        tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async move {
+                let user = get_user_by_id(&pool, id).await?;
+
+                Ok(CurrentUser {
+                    id: user.id,
+                    role: user.role,
+                })
+            })
+        })
+    }
+}
+
 /// Hash a plaintext password using Argon2
 fn hash_password(password: &str) -> Result<String, AppError> {
-    let salt = SaltString::generate(rand::thread_rng());
+    let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
 
     argon2

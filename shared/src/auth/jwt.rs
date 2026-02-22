@@ -52,17 +52,19 @@ impl From<SystemTimeError> for AuthError {
     }
 }
 
+#[derive(Clone)]
 pub struct CurrentUser {
-    pub user_id: String,
+    pub id: Uuid,
     pub role: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tokens {
+pub struct JwtTokens {
     pub access_token: String,
     pub refresh_token: String,
 }
 
+#[derive(Clone)]
 pub struct JwtService {
     config: AuthConfig,
 }
