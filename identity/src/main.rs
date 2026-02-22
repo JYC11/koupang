@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
     let db_config = DbConfig::new();
-    let pool = init_db(db_config, "./migrations/identity").await;
+    let pool = init_db(db_config, "./.migrations/identity").await;
     let app_state = AppState::new(pool);
     let port = app_state.common_app_state.port;
     let app = routes(app_state);
