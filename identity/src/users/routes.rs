@@ -16,7 +16,7 @@ use shared::auth::jwt::{CurrentUser, JwtTokens};
 use shared::auth::middleware::{AuthMiddleware, GetCurrentUser};
 use shared::errors::AppError;
 
-pub fn routes(app_state: AppState) -> Router {
+pub fn user_routes(app_state: AppState) -> Router {
     let auth_middleware = AuthMiddleware::new(
         Arc::new(app_state.service.jwt_service.clone()),
         app_state.service.clone() as Arc<dyn GetCurrentUser>,
