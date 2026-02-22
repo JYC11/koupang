@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "bff-gateway",
+    "shared",
+    "identity",
+    "catalog",
+    "order",
+    "payment",
+    "shipping",
+    "notification",
+    "review",
+    "moderation"
+]
