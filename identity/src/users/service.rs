@@ -7,7 +7,7 @@ use crate::users::repository::{
 };
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use shared::auth::{AuthService, Tokens};
+use shared::auth::{JwtService, Tokens};
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::db::transaction_support::with_transaction;
@@ -16,14 +16,14 @@ use uuid::Uuid;
 
 pub struct UserService {
     pool: PgPool,
-    auth_service: AuthService,
+    jwt_service: JwtService,
 }
 
 impl UserService {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool: pool.clone(),
-            auth_service: AuthService::new(AuthConfig::new()),
+            jwt_service: JwtService::new(AuthConfig::new()),
         }
     }
 
@@ -99,12 +99,12 @@ impl UserService {
 
         // Generate tokens
         let access_token = self
-            .auth_service
+            .jwt_service
             .generate_access_token(&user.id, &user.username, &user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
         let refresh_token = self
-            .auth_service
+            .jwt_service
             .generate_refresh_token(&user.id)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
@@ -120,7 +120,7 @@ impl UserService {
     ) -> Result<UserRefreshRes, AppError> {
         // Validate refresh token and extract user ID
         let claims = self
-            .auth_service
+            .jwt_service
             .validate_refresh_token(&req.refresh_token)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
@@ -128,7 +128,7 @@ impl UserService {
 
         // Generate new access token
         let access_token = self
-            .auth_service
+            .jwt_service
             .generate_access_token(&user.id, &user.username, &user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AccessTokenClaims {
-    pub sub: Uuid,  // Subject (User ID)
+    pub sub: Uuid,    // Subject (User ID)
     pub name: String, // Custom Claim
     pub role: String, // Custom Claim
     pub iat: i64,     // Issued At
@@ -15,7 +15,7 @@ pub struct AccessTokenClaims {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RefreshTokenClaims {
-    pub sub: Uuid, // Subject (User ID)
+    pub sub: Uuid,   // Subject (User ID)
     pub jti: String, // JWT ID (Unique identifier for revocation)
     pub iat: i64,
     pub exp: i64,
@@ -63,12 +63,11 @@ pub struct Tokens {
     pub refresh_token: String,
 }
 
-
-pub struct AuthService {
+pub struct JwtService {
     config: AuthConfig,
 }
 
-impl AuthService {
+impl JwtService {
     pub fn new(config: AuthConfig) -> Self {
         Self { config }
     }
@@ -123,7 +122,7 @@ impl AuthService {
         validation.validate_exp = true;
 
         let token_data = match decode::<AccessTokenClaims>(token, &decoding_key, &validation) {
-            Ok(token_data) => { token_data }
+            Ok(token_data) => token_data,
             Err(e) => {
                 println!("{:?}", e);
                 return Err(AuthError::InvalidToken);
@@ -142,7 +141,7 @@ impl AuthService {
         validation.validate_exp = true;
 
         let token_data = match decode::<RefreshTokenClaims>(token, &decoding_key, &validation) {
-            Ok(token_data) => { token_data }
+            Ok(token_data) => token_data,
             Err(e) => {
                 println!("{:?}", e);
                 return Err(AuthError::InvalidToken);
@@ -172,7 +171,6 @@ impl AuthService {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,9 +178,9 @@ mod tests {
     use std::time::Duration;
 
     // Helper to create a service with test configuration
-    fn get_test_service() -> AuthService {
+    fn get_test_service() -> JwtService {
         let config = AuthConfig::for_tests();
-        AuthService::new(config)
+        JwtService::new(config)
     }
 
     // Helper to create validation with no leeway (for testing expiration)
@@ -233,7 +231,7 @@ mod tests {
     #[test]
     fn test_access_token_invalid_signature() {
         let service = get_test_service();
-        let user_id = Uuid::new_v4();;
+        let user_id = Uuid::new_v4();
 
         let token = service
             .generate_access_token(&user_id, "Name", "Role")
@@ -241,7 +239,7 @@ mod tests {
 
         let mut config = AuthConfig::for_tests();
         config.access_token_secret = b"different_secret".to_vec();
-        let wrong_service = AuthService::new(config);
+        let wrong_service = JwtService::new(config);
 
         let result = wrong_service.validate_access_token(&token);
 
@@ -251,13 +249,13 @@ mod tests {
     #[test]
     fn test_refresh_token_invalid_signature() {
         let service = get_test_service();
-        let user_id = Uuid::new_v4();;
+        let user_id = Uuid::new_v4();
 
         let token = service.generate_refresh_token(&user_id).unwrap();
 
         let mut config = AuthConfig::for_tests();
         config.refresh_token_secret = b"different_secret".to_vec();
-        let wrong_service = AuthService::new(config);
+        let wrong_service = JwtService::new(config);
 
         let result = wrong_service.validate_refresh_token(&token);
 
@@ -268,8 +266,8 @@ mod tests {
     fn test_access_token_expiration() {
         let mut config = AuthConfig::for_tests();
         config.access_token_expiry_secs = 1;
-        let service = AuthService::new(config);
-        let user_id = Uuid::new_v4();;
+        let service = JwtService::new(config);
+        let user_id = Uuid::new_v4();
         let token = service
             .generate_access_token(&user_id, "Name", "Role")
             .unwrap();
@@ -290,7 +288,7 @@ mod tests {
     fn test_refresh_token_expiration() {
         let mut config = AuthConfig::for_tests();
         config.refresh_token_expiry_secs = 1;
-        let service = AuthService::new(config);
+        let service = JwtService::new(config);
         let user_id = Uuid::new_v4();
 
         let token = service.generate_refresh_token(&user_id).unwrap();
@@ -299,7 +297,10 @@ mod tests {
 
         thread::sleep(Duration::from_secs(2));
 
-        assert!(service.validate_refresh_token(&token).is_err(), "Expected expired refresh token to be invalid");
+        assert!(
+            service.validate_refresh_token(&token).is_err(),
+            "Expected expired refresh token to be invalid"
+        );
     }
 
     #[test]
@@ -307,7 +308,7 @@ mod tests {
         // This test uses strict validation with no leeway
         let mut config = AuthConfig::for_tests();
         config.access_token_expiry_secs = 1;
-        let service = AuthService::new(config.clone());
+        let service = JwtService::new(config.clone());
         let user_id = Uuid::new_v4();
 
         let token = service
@@ -326,7 +327,10 @@ mod tests {
 
         // Should be invalid with strict validation
         let result = decode::<AccessTokenClaims>(&token, &decoding_key, &validation);
-        assert!(result.is_err(), "Expected expired token to be invalid with strict validation");
+        assert!(
+            result.is_err(),
+            "Expected expired token to be invalid with strict validation"
+        );
     }
 
     #[test]
@@ -335,7 +339,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let new_name = "Updated Name";
         let new_role = "super_admin";
-        
+
         let refresh_token = service
             .generate_refresh_token(&user_id)
             .expect("Failed to generate refresh token");
@@ -352,7 +356,7 @@ mod tests {
         assert_eq!(claims.name, new_name);
         assert_eq!(claims.role, new_role);
 
-        let now = AuthService::current_timestamp().unwrap();
+        let now = JwtService::current_timestamp().unwrap();
         assert!(claims.exp > now);
     }
 
@@ -360,11 +364,13 @@ mod tests {
     fn test_refresh_with_invalid_token() {
         let service = get_test_service();
         let user_id = Uuid::new_v4();
-        
+
         let result = service.refresh_access("invalid.token.here", "Name", "Role");
         assert!(result.is_err());
 
-        let access_token = service.generate_access_token(&user_id, "Name", "Role").unwrap();
+        let access_token = service
+            .generate_access_token(&user_id, "Name", "Role")
+            .unwrap();
         let result = service.refresh_access(&access_token, "Name", "Role");
         assert!(result.is_err());
     }

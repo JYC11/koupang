@@ -46,3 +46,4 @@
 - Kafka
 - Opentelemetry
 - Prometheus
+- GRPC: https://github.com/hyperium/tonic
