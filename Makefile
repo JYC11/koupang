@@ -19,3 +19,7 @@ test: ## Run tests for a specific service or all services (usage: make test SERV
 .PHONY: migration
 migration: ## Create a new migration file (usage: make migration SERVICE=identity or just make migration)
 	@bash util-scripts/migration.sh $(SERVICE)
+
+.PHONY: adr
+adr: ## Create a new ADR file (usage: make adr or make adr TITLE="use redis for caching")
+	@bash util-scripts/adr.sh $(TITLE)

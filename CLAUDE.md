@@ -8,6 +8,12 @@
 
 ## Documentation reminder
 - when changes are made, update the corresponding CLAUDE.md file in the relevant module
+- when a non-trivial architectural or technical decision is made during a plan, create an ADR in `.plan/adr/` using `make adr` or the template at `.plan/adr/template.md`
+
+## Progress tracking
+- ADRs (Architecture Decision Records) live in `.plan/adr/` — one file per decision capturing context, decision, and consequences
+- Git tags mark milestones (e.g. `v0.1-identity-auth`) — tag after completing a service or major feature
+- Progress summaries for blog posts live in `.plan/progress-summary-*.md`
 
 ## Microservices
 
@@ -75,7 +81,10 @@
 
 ## Scripts
 - refer to the Makefile
-  - has scripts for running tests and creating empty migration files
+  - `make test SERVICE=identity` — run tests for a service
+  - `make migration SERVICE=identity` — create a new migration file
+  - `make adr` — create a new ADR file (auto-increments number)
+  - `make local-infra` / `make local-infra-down` — start/stop local Docker infra
 
 ## Task management
 
