@@ -40,6 +40,7 @@
 - rust (most used crates in no particular order)
   - axum
   - sqlx
+    - use the with_transaction method to wrap database operations in a transaction (shared/db/transaction_support.rs)
   - tokio
 - infra
   - postgres
