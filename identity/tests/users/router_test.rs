@@ -424,48 +424,6 @@ async fn delete_without_auth_returns_401(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-// ── Internal Endpoint Tests ─────────────────────────────────
-
-#[sqlx::test(migrations = "./migrations")]
-async fn internal_get_user_no_auth_returns_200(pool: PgPool) {
-    let (_, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
-    let state = test_app_state(pool);
-    let router = app(state);
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri(&format!("/internal/users/{}", user_id))
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = body_json(resp).await;
-    assert_eq!(body["id"].as_str().unwrap(), user_id);
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn internal_get_nonexistent_returns_404(pool: PgPool) {
-    let state = test_app_state(pool);
-    let router = app(state);
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri(&format!("/internal/users/{}", uuid::Uuid::new_v4()))
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
 // ── Email Verification Tests ────────────────────────────────
 
 #[sqlx::test(migrations = "./migrations")]

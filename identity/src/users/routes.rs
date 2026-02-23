@@ -41,12 +41,8 @@ pub fn user_routes(app_state: AppState) -> Router {
             auth_middleware.clone().handle(req, next)
         }));
 
-    // DEPRECATED: Use gRPC IdentityService.GetUser instead (port 50051)
-    let internal_routes = Router::new().route("/{id}", get(get_one_for_auth));
-
     Router::new()
         .nest("/api/v1/users", public_routes.merge(protected_routes))
-        .nest("/internal/users", internal_routes)
         .with_state(app_state)
 }
 
@@ -162,13 +158,4 @@ async fn reset_password(
         axum::http::StatusCode::OK,
         "Password has been reset successfully",
     ))
-}
-
-// DEPRECATED: Use gRPC IdentityService.GetUser instead
-async fn get_one_for_auth(
-    State(app_state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<UserRes>, AppError> {
-    let user = app_state.service.get_user(id).await?;
-    Ok(Json(user))
 }
