@@ -6,11 +6,15 @@
 
 - refer to .plan/critical-user-flows.md for user flows as needed
 
+## Documentation reminder
+- when changes are made, update the corresponding CLAUDE.md file in the relevant module
+
 ## Microservices
 
 - Identity
   - Responsibility: Auth, Users, Profiles
   - Data owned: Users, Credentials, Roles
+  - See [identity/CLAUDE.md](identity/CLAUDE.md) for full reference
 - Catalog
   - Responsibility: Product Info, Pricing, Inventory
   - Data owned: Products, stock levels
@@ -77,3 +81,4 @@
 
 - beads_rust: https://github.com/Dicklesworthstone/beads_rust
   - br skill has been created for use
+  - load in this skill first and then create tasks when plan is approved
