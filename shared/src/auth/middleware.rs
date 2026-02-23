@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use axum::{extract::FromRequestParts, http::request::Parts};
 use axum::{
     extract::Request,
@@ -6,15 +7,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
-use tokio;
 use uuid::Uuid;
 
 use crate::auth::jwt::{AccessTokenClaims, AuthError, CurrentUser, JwtService};
 use crate::errors::AppError;
 
+#[async_trait]
 pub trait GetCurrentUser: Send + Sync {
-    // need to make this async somehow...
-    fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError>;
+    async fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError>;
 }
 
 #[derive(Clone)]
@@ -51,15 +51,13 @@ impl AuthMiddleware {
                 _ => AuthMiddlewareError::InvalidToken,
             })?;
 
-        // 3. Fetch current user (blocking call)
+        // 3. Fetch current user
         let user_id = claims.sub;
-        let current_user = {
-            let getter = self.current_user_getter.clone();
-            tokio::task::spawn_blocking(move || getter.get_by_id(user_id))
-                .await
-                .map_err(|_| AuthMiddlewareError::InternalError)?
-                .map_err(|_| AuthMiddlewareError::UserNotFound)?
-        };
+        let current_user = self
+            .current_user_getter
+            .get_by_id(user_id)
+            .await
+            .map_err(|_| AuthMiddlewareError::UserNotFound)?;
 
         // 4. Store CurrentUser in request extensions
         req.extensions_mut().insert(current_user);
