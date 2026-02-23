@@ -15,8 +15,11 @@ async fn start_grpc_server(pool: PgPool) -> String {
     start_test_grpc_server(router).await
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_returns_correct_response(pool: PgPool) {
+#[tokio::test]
+async fn get_user_returns_correct_response() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let req = sample_create_req();
     let username = req.username.clone();
     let email = req.email.clone();
@@ -43,8 +46,11 @@ async fn get_user_returns_correct_response(pool: PgPool) {
     assert!(!response.email_verified);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_verified_email_flag(pool: PgPool) {
+#[tokio::test]
+async fn get_user_verified_email_flag() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -67,8 +73,11 @@ async fn get_user_verified_email_flag(pool: PgPool) {
     assert!(response.email_verified);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_nonexistent_returns_not_found(pool: PgPool) {
+#[tokio::test]
+async fn get_user_nonexistent_returns_not_found() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let url = start_grpc_server(pool).await;
     let mut client = IdentityServiceClient::connect(url).await.unwrap();
 
@@ -82,8 +91,11 @@ async fn get_user_nonexistent_returns_not_found(pool: PgPool) {
     assert_eq!(status.code(), Code::NotFound);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_invalid_uuid_returns_invalid_argument(pool: PgPool) {
+#[tokio::test]
+async fn get_user_invalid_uuid_returns_invalid_argument() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let url = start_grpc_server(pool).await;
     let mut client = IdentityServiceClient::connect(url).await.unwrap();
 
@@ -98,8 +110,11 @@ async fn get_user_invalid_uuid_returns_invalid_argument(pool: PgPool) {
     assert!(status.message().contains("Invalid UUID"));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_empty_id_returns_invalid_argument(pool: PgPool) {
+#[tokio::test]
+async fn get_user_empty_id_returns_invalid_argument() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let url = start_grpc_server(pool).await;
     let mut client = IdentityServiceClient::connect(url).await.unwrap();
 
@@ -113,8 +128,11 @@ async fn get_user_empty_id_returns_invalid_argument(pool: PgPool) {
     assert_eq!(status.code(), Code::InvalidArgument);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_deleted_returns_not_found(pool: PgPool) {
+#[tokio::test]
+async fn get_user_deleted_returns_not_found() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
+
     let req = sample_create_req();
 
     let mut conn = pool.acquire().await.unwrap();

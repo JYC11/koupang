@@ -22,7 +22,7 @@ prost = "0.14.3"
 prost-types = "0.14.3"
 redis = { version = "1.0.4", features = ["tokio-comp", "connection-manager"] }
 tonic-prost = "0.14.5"
-testcontainers-modules = { version = "0.15", features = ["redis"], optional = true }
+testcontainers-modules = { version = "0.15", features = ["redis", "postgres"], optional = true }
 tokio-stream = { version = "0.1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 

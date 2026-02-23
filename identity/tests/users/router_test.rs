@@ -68,8 +68,10 @@ async fn register_and_login(pool: &PgPool, req: &UserCreateReq) -> (String, Stri
 
 // ── Register Tests ──────────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn register_returns_201(pool: PgPool) {
+#[tokio::test]
+async fn register_returns_201() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
     let req = sample_create_req();
@@ -78,8 +80,10 @@ async fn register_returns_201(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::CREATED);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn register_duplicate_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn register_duplicate_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
     let req = sample_create_req();
@@ -99,8 +103,10 @@ async fn register_duplicate_returns_error(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn register_missing_fields_returns_422(pool: PgPool) {
+#[tokio::test]
+async fn register_missing_fields_returns_422() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -120,8 +126,10 @@ async fn register_missing_fields_returns_422(pool: PgPool) {
 
 // ── Login Tests ─────────────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_returns_tokens(pool: PgPool) {
+#[tokio::test]
+async fn login_returns_tokens() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool.clone());
     let router = app(state);
     let req = sample_create_req();
@@ -148,8 +156,10 @@ async fn login_returns_tokens(pool: PgPool) {
     assert!(!tokens.refresh_token.is_empty());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_wrong_credentials_fails(pool: PgPool) {
+#[tokio::test]
+async fn login_wrong_credentials_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
     let req = sample_create_req();
@@ -175,8 +185,10 @@ async fn login_wrong_credentials_fails(pool: PgPool) {
 
 // ── Refresh Tests ───────────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn refresh_returns_new_access_token(pool: PgPool) {
+#[tokio::test]
+async fn refresh_returns_new_access_token() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (_, refresh_token, _) = register_and_login(&pool, &sample_create_req()).await;
     let state = test_app_state(pool);
     let router = app(state);
@@ -202,8 +214,10 @@ async fn refresh_returns_new_access_token(pool: PgPool) {
 
 // ── GET User Tests ──────────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_without_auth_returns_401(pool: PgPool) {
+#[tokio::test]
+async fn get_user_without_auth_returns_401() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -220,8 +234,10 @@ async fn get_user_without_auth_returns_401(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_own_user_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn get_own_user_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
     let state = test_app_state(pool);
     let router = app(state);
@@ -243,8 +259,10 @@ async fn get_own_user_returns_200(pool: PgPool) {
     assert_eq!(body["id"].as_str().unwrap(), user_id);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_other_user_non_admin_returns_403(pool: PgPool) {
+#[tokio::test]
+async fn get_other_user_non_admin_returns_403() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (access_token, _, _) = register_and_login(&pool, &sample_create_req()).await;
 
     // Register another user
@@ -276,8 +294,10 @@ async fn get_other_user_non_admin_returns_403(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn admin_can_get_any_user(pool: PgPool) {
+#[tokio::test]
+async fn admin_can_get_any_user() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     // Register a regular user
     let state = test_app_state(pool.clone());
     let router = app(state);
@@ -312,8 +332,10 @@ async fn admin_can_get_any_user(pool: PgPool) {
 
 // ── PUT User Tests ──────────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_own_user_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn update_own_user_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
     let state = test_app_state(pool);
     let router = app(state);
@@ -334,8 +356,10 @@ async fn update_own_user_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_other_user_non_admin_returns_403(pool: PgPool) {
+#[tokio::test]
+async fn update_other_user_non_admin_returns_403() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (access_token, _, _) = register_and_login(&pool, &sample_create_req()).await;
 
     // Register another user
@@ -371,8 +395,10 @@ async fn update_other_user_non_admin_returns_403(pool: PgPool) {
 
 // ── DELETE User Tests ───────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_own_user_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn delete_own_user_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
     let state = test_app_state(pool);
     let router = app(state);
@@ -391,8 +417,10 @@ async fn delete_own_user_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_without_auth_returns_401(pool: PgPool) {
+#[tokio::test]
+async fn delete_without_auth_returns_401() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -411,8 +439,10 @@ async fn delete_without_auth_returns_401(pool: PgPool) {
 
 // ── Email Verification Tests ────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_unverified_email_returns_403(pool: PgPool) {
+#[tokio::test]
+async fn login_unverified_email_returns_403() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
     let req = sample_create_req();
@@ -432,8 +462,10 @@ async fn login_unverified_email_returns_403(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn verify_email_with_valid_token_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn verify_email_with_valid_token_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool.clone());
     let router = app(state);
     let req = sample_create_req();
@@ -466,8 +498,10 @@ async fn verify_email_with_valid_token_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn verify_email_with_invalid_token_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn verify_email_with_invalid_token_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -492,8 +526,10 @@ async fn verify_email_with_invalid_token_returns_error(pool: PgPool) {
 
 // ── Password Reset Tests ────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn forgot_password_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn forgot_password_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool.clone());
     let router = app(state);
     let req = sample_create_req();
@@ -520,8 +556,10 @@ async fn forgot_password_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn forgot_password_nonexistent_email_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn forgot_password_nonexistent_email_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -544,8 +582,10 @@ async fn forgot_password_nonexistent_email_returns_200(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn reset_password_with_valid_token_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn reset_password_with_valid_token_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool.clone());
     let router = app(state);
     let req = sample_create_req();
@@ -594,8 +634,10 @@ async fn reset_password_with_valid_token_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn reset_password_with_invalid_token_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn reset_password_with_invalid_token_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 
@@ -620,8 +662,10 @@ async fn reset_password_with_invalid_token_returns_error(pool: PgPool) {
 
 // ── Password Change Tests ───────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_returns_200(pool: PgPool) {
+#[tokio::test]
+async fn change_password_returns_200() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let (access_token, _, _) = register_and_login(&pool, &req).await;
     let state = test_app_state(pool);
@@ -646,8 +690,10 @@ async fn change_password_returns_200(pool: PgPool) {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_wrong_current_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn change_password_wrong_current_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let (access_token, _, _) = register_and_login(&pool, &req).await;
     let state = test_app_state(pool);
@@ -676,8 +722,10 @@ async fn change_password_wrong_current_returns_error(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_same_password_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn change_password_same_password_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let (access_token, _, _) = register_and_login(&pool, &req).await;
     let state = test_app_state(pool);
@@ -706,8 +754,10 @@ async fn change_password_same_password_returns_error(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_without_auth_returns_401(pool: PgPool) {
+#[tokio::test]
+async fn change_password_without_auth_returns_401() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let state = test_app_state(pool);
     let router = app(state);
 

@@ -4,8 +4,13 @@ use identity::users::service::UserService;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::email::MockEmailService;
+use shared::test_utils::db::TestDb;
 use shared::test_utils::redis::TestRedis;
 use std::sync::Arc;
+
+pub async fn test_db() -> TestDb {
+    TestDb::start("./migrations").await
+}
 
 pub fn test_auth_config() -> AuthConfig {
     AuthConfig {

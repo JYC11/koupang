@@ -1,12 +1,13 @@
 use crate::common::{sample_create_req, sample_create_req_2, sample_update_req};
 use chrono::{Duration, Utc};
 use identity::users::repository::*;
-use shared::db::PgPool;
 use shared::errors::AppError;
 use uuid::Uuid;
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_inserts_row(pool: PgPool) {
+#[tokio::test]
+async fn create_user_inserts_row() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
     let email = req.email.clone();
@@ -24,8 +25,10 @@ async fn create_user_inserts_row(pool: PgPool) {
     assert!(user.deleted_at.is_none());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_duplicate_username_fails(pool: PgPool) {
+#[tokio::test]
+async fn create_user_duplicate_username_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req1 = sample_create_req();
     let mut req2 = sample_create_req_2();
     req2.username = req1.username.clone();
@@ -38,8 +41,10 @@ async fn create_user_duplicate_username_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_duplicate_email_fails(pool: PgPool) {
+#[tokio::test]
+async fn create_user_duplicate_email_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req1 = sample_create_req();
     let mut req2 = sample_create_req_2();
     req2.email = req1.email.clone();
@@ -52,8 +57,10 @@ async fn create_user_duplicate_email_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_id_returns_existing(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_id_returns_existing() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -68,14 +75,18 @@ async fn get_user_by_id_returns_existing(pool: PgPool) {
     assert_eq!(fetched.email, created.email);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_id_nonexistent_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_id_nonexistent_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let result = get_user_by_id(&pool, Uuid::new_v4()).await;
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_username_returns_existing(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_username_returns_existing() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -86,14 +97,18 @@ async fn get_user_by_username_returns_existing(pool: PgPool) {
     assert_eq!(user.username, username);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_username_nonexistent_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_username_nonexistent_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let result = get_user_by_username(&pool, &"nonexistent".to_string()).await;
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_user_modifies_fields(pool: PgPool) {
+#[tokio::test]
+async fn update_user_modifies_fields() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -118,8 +133,10 @@ async fn update_user_modifies_fields(pool: PgPool) {
     assert!(updated.updated_at.is_some());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_nonexistent_user_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn update_nonexistent_user_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let update_req = sample_update_req();
 
     let mut conn = pool.acquire().await.unwrap();
@@ -127,8 +144,10 @@ async fn update_nonexistent_user_returns_error(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_user_soft_deletes(pool: PgPool) {
+#[tokio::test]
+async fn delete_user_soft_deletes() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -145,8 +164,10 @@ async fn delete_user_soft_deletes(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_nonexistent_user_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn delete_nonexistent_user_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let mut conn = pool.acquire().await.unwrap();
     let result = delete_user(&mut *conn, Uuid::new_v4()).await;
     assert!(result.is_err());
@@ -154,8 +175,10 @@ async fn delete_nonexistent_user_returns_error(pool: PgPool) {
 
 // ── Email Verification Token Tests ──────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn new_user_has_email_verified_false(pool: PgPool) {
+#[tokio::test]
+async fn new_user_has_email_verified_false() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
 
@@ -166,8 +189,10 @@ async fn new_user_has_email_verified_false(pool: PgPool) {
     assert!(!user.email_verified);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_verification_token_inserts_row(pool: PgPool) {
+#[tokio::test]
+async fn create_verification_token_inserts_row() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -186,8 +211,10 @@ async fn create_verification_token_inserts_row(pool: PgPool) {
     assert!(token_entity.used_at.is_none());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_valid_verification_token_works(pool: PgPool) {
+#[tokio::test]
+async fn get_valid_verification_token_works() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -202,8 +229,10 @@ async fn get_valid_verification_token_works(pool: PgPool) {
     assert!(result.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_expired_verification_token_fails(pool: PgPool) {
+#[tokio::test]
+async fn get_expired_verification_token_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -218,8 +247,10 @@ async fn get_expired_verification_token_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn mark_token_used_sets_used_at(pool: PgPool) {
+#[tokio::test]
+async fn mark_token_used_sets_used_at() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -242,8 +273,10 @@ async fn mark_token_used_sets_used_at(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn verify_user_email_sets_flag(pool: PgPool) {
+#[tokio::test]
+async fn verify_user_email_sets_flag() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
     let mut conn = pool.acquire().await.unwrap();
@@ -259,8 +292,10 @@ async fn verify_user_email_sets_flag(pool: PgPool) {
 
 // ── Password Reset Token Tests ──────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_email_returns_existing(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_email_returns_existing() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let email = req.email.clone();
 
@@ -271,15 +306,19 @@ async fn get_user_by_email_returns_existing(pool: PgPool) {
     assert_eq!(user.email, email);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_by_email_nonexistent_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn get_user_by_email_nonexistent_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let result = get_user_by_email(&pool, "nonexistent@example.com").await;
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), AppError::NotFound(_)));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_password_reset_token_inserts_row(pool: PgPool) {
+#[tokio::test]
+async fn create_password_reset_token_inserts_row() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -298,8 +337,10 @@ async fn create_password_reset_token_inserts_row(pool: PgPool) {
     assert!(token_entity.used_at.is_none());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_valid_password_reset_token_works(pool: PgPool) {
+#[tokio::test]
+async fn get_valid_password_reset_token_works() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -314,8 +355,10 @@ async fn get_valid_password_reset_token_works(pool: PgPool) {
     assert!(result.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_expired_password_reset_token_fails(pool: PgPool) {
+#[tokio::test]
+async fn get_expired_password_reset_token_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -330,8 +373,10 @@ async fn get_expired_password_reset_token_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn mark_reset_token_used_sets_used_at(pool: PgPool) {
+#[tokio::test]
+async fn mark_reset_token_used_sets_used_at() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -356,8 +401,10 @@ async fn mark_reset_token_used_sets_used_at(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_user_password_changes_hash(pool: PgPool) {
+#[tokio::test]
+async fn update_user_password_changes_hash() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let req = sample_create_req();
     let username = req.username.clone();
     let mut conn = pool.acquire().await.unwrap();

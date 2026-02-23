@@ -7,20 +7,23 @@ use identity::users::dtos::{
 };
 use redis::AsyncCommands;
 use shared::auth::middleware::GetCurrentUser;
-use shared::db::PgPool;
 use shared::test_utils::redis::TestRedis;
 use uuid::Uuid;
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_succeeds(pool: PgPool) {
+#[tokio::test]
+async fn create_user_succeeds() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let req = sample_create_req();
     let result = service.create_user(req).await;
     assert!(result.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_hashes_password(pool: PgPool) {
+#[tokio::test]
+async fn create_user_hashes_password() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -37,8 +40,10 @@ async fn create_user_hashes_password(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_user_returns_user_res(pool: PgPool) {
+#[tokio::test]
+async fn get_user_returns_user_res() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -57,15 +62,19 @@ async fn get_user_returns_user_res(pool: PgPool) {
     assert_eq!(user_res.id, entity.id.to_string());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_nonexistent_user_returns_error(pool: PgPool) {
+#[tokio::test]
+async fn get_nonexistent_user_returns_error() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let result = service.get_user(Uuid::new_v4()).await;
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_user_changes_fields(pool: PgPool) {
+#[tokio::test]
+async fn update_user_changes_fields() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -83,8 +92,10 @@ async fn update_user_changes_fields(pool: PgPool) {
     assert_eq!(updated.username, new_username);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_user_makes_unfetchable(pool: PgPool) {
+#[tokio::test]
+async fn delete_user_makes_unfetchable() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -100,8 +111,10 @@ async fn delete_user_makes_unfetchable(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_correct_credentials_returns_tokens(pool: PgPool) {
+#[tokio::test]
+async fn login_correct_credentials_returns_tokens() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -124,8 +137,10 @@ async fn login_correct_credentials_returns_tokens(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_wrong_password_fails(pool: PgPool) {
+#[tokio::test]
+async fn login_wrong_password_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let req = sample_create_req();
     let username = req.username.clone();
@@ -139,8 +154,10 @@ async fn login_wrong_password_fails(pool: PgPool) {
     assert!(result.is_err(), "Login with wrong password should fail");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_nonexistent_username_fails(pool: PgPool) {
+#[tokio::test]
+async fn login_nonexistent_username_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let login_req = UserLoginReq {
         username: "nonexistent".to_string(),
@@ -150,8 +167,10 @@ async fn login_nonexistent_username_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn refresh_token_returns_new_access_token(pool: PgPool) {
+#[tokio::test]
+async fn refresh_token_returns_new_access_token() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -178,8 +197,10 @@ async fn refresh_token_returns_new_access_token(pool: PgPool) {
     assert!(!refresh_res.access_token.is_empty());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn refresh_with_invalid_token_fails(pool: PgPool) {
+#[tokio::test]
+async fn refresh_with_invalid_token_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let result = service
         .generate_refresh_token(UserRefreshReq {
@@ -189,8 +210,10 @@ async fn refresh_with_invalid_token_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_current_user_returns_correct_user(pool: PgPool) {
+#[tokio::test]
+async fn get_current_user_returns_correct_user() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -206,8 +229,10 @@ async fn get_current_user_returns_correct_user(pool: PgPool) {
     assert_eq!(current_user.role, role);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn login_unverified_user_fails(pool: PgPool) {
+#[tokio::test]
+async fn login_unverified_user_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
     let req = sample_create_req();
     let username = req.username.clone();
@@ -219,8 +244,10 @@ async fn login_unverified_user_fails(pool: PgPool) {
     assert!(result.is_err(), "Login should fail for unverified user");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn verify_email_sets_email_verified(pool: PgPool) {
+#[tokio::test]
+async fn verify_email_sets_email_verified() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -243,8 +270,10 @@ async fn verify_email_sets_email_verified(pool: PgPool) {
     assert!(user.email_verified);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn create_user_generates_verification_token(pool: PgPool) {
+#[tokio::test]
+async fn create_user_generates_verification_token() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     service.create_user(req).await.unwrap();
@@ -258,8 +287,10 @@ async fn create_user_generates_verification_token(pool: PgPool) {
 
 // ── Password Reset Tests ────────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn forgot_password_with_valid_email_creates_token(pool: PgPool) {
+#[tokio::test]
+async fn forgot_password_with_valid_email_creates_token() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let email = req.email.clone();
@@ -275,8 +306,10 @@ async fn forgot_password_with_valid_email_creates_token(pool: PgPool) {
     assert_eq!(count.0, 1, "Should have created one password reset token");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn forgot_password_with_invalid_email_does_not_fail(pool: PgPool) {
+#[tokio::test]
+async fn forgot_password_with_invalid_email_does_not_fail() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
 
     let result = service
@@ -293,8 +326,10 @@ async fn forgot_password_with_invalid_email_does_not_fail(pool: PgPool) {
     assert_eq!(count.0, 0, "Should not have created any token");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn reset_password_with_valid_token_succeeds(pool: PgPool) {
+#[tokio::test]
+async fn reset_password_with_valid_token_succeeds() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let email = req.email.clone();
@@ -333,8 +368,10 @@ async fn reset_password_with_valid_token_succeeds(pool: PgPool) {
     assert!(login_result.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn reset_password_with_invalid_token_fails(pool: PgPool) {
+#[tokio::test]
+async fn reset_password_with_invalid_token_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool);
 
     let result = service
@@ -348,8 +385,10 @@ async fn reset_password_with_invalid_token_fails(pool: PgPool) {
 
 // ── Password Change Tests ───────────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_with_correct_current_succeeds(pool: PgPool) {
+#[tokio::test]
+async fn change_password_with_correct_current_succeeds() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -382,8 +421,10 @@ async fn change_password_with_correct_current_succeeds(pool: PgPool) {
     assert!(login_result.is_ok());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_with_wrong_current_fails(pool: PgPool) {
+#[tokio::test]
+async fn change_password_with_wrong_current_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -405,8 +446,10 @@ async fn change_password_with_wrong_current_fails(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_same_as_current_fails(pool: PgPool) {
+#[tokio::test]
+async fn change_password_same_as_current_fails() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
@@ -431,8 +474,10 @@ async fn change_password_same_as_current_fails(pool: PgPool) {
 
 // ── Redis Cache Behavior Tests ──────────────────────────────
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_by_id_caches_user_in_redis(pool: PgPool) {
+#[tokio::test]
+async fn get_by_id_caches_user_in_redis() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let test_redis = TestRedis::start().await;
     let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
@@ -466,8 +511,10 @@ async fn get_by_id_caches_user_in_redis(pool: PgPool) {
     assert_eq!(cached_user.role, current_user.role);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn get_by_id_cache_hit_returns_same_data(pool: PgPool) {
+#[tokio::test]
+async fn get_by_id_cache_hit_returns_same_data() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let (service, _test_redis) = test_user_service_with_redis(pool.clone()).await;
 
     let req = sample_create_req();
@@ -487,8 +534,10 @@ async fn get_by_id_cache_hit_returns_same_data(pool: PgPool) {
     assert_eq!(first.role, second.role);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn update_user_evicts_cache(pool: PgPool) {
+#[tokio::test]
+async fn update_user_evicts_cache() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let test_redis = TestRedis::start().await;
     let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
@@ -523,8 +572,10 @@ async fn update_user_evicts_cache(pool: PgPool) {
     assert!(cached.is_none(), "Cache should be evicted after update");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn delete_user_evicts_cache(pool: PgPool) {
+#[tokio::test]
+async fn delete_user_evicts_cache() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let test_redis = TestRedis::start().await;
     let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
@@ -560,8 +611,10 @@ async fn delete_user_evicts_cache(pool: PgPool) {
     assert!(result.is_err());
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn change_password_evicts_cache(pool: PgPool) {
+#[tokio::test]
+async fn change_password_evicts_cache() {
+    let db = crate::common::test_db().await;
+    let pool = db.pool.clone();
     let test_redis = TestRedis::start().await;
     let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
