@@ -3,9 +3,8 @@ pub mod transaction_support;
 
 use crate::config::db_config::DbConfig;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Executor, Pool, Postgres, Transaction};
+use sqlx::{Executor, Pool, Postgres};
 
-pub type PgTx<'a> = Transaction<'a, Postgres>;
 pub trait PgExec<'e>: Executor<'e, Database = Postgres> {}
 impl<'e, T: Executor<'e, Database = Postgres>> PgExec<'e> for T {}
 pub type PgPool = Pool<Postgres>;

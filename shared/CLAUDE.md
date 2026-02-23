@@ -21,7 +21,9 @@ Reusable libraries and infrastructure code shared across all microservices.
 ### Database (`db`)
 
 - `init_db(DbConfig, migrations_dir) -> PgPool` — connect + run migrations
-- Type aliases: `PgPool`, `PgTx<'a>`, `PgExec<'e>` (executor trait)
+- Type aliases: `PgPool`, `PgExec<'e>` (executor trait)
+  - `PgExec<'e>` is used as a type for read operations
+  - `PgConnection` is used as a type for write operations
 
 #### Transaction Support (`db::transaction_support`)
 
