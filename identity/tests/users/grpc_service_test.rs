@@ -1,0 +1,153 @@
+use crate::common::sample_create_req;
+use identity::users::grpc_service::IdentityGrpcService;
+use identity::users::repository::create_user;
+use shared::db::PgPool;
+use shared::grpc::identity::GetUserRequest;
+use shared::grpc::identity::identity_service_client::IdentityServiceClient;
+use shared::grpc::identity::identity_service_server::IdentityServiceServer;
+use tokio::net::TcpListener;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::Code;
+use uuid::Uuid;
+
+async fn start_grpc_server(pool: PgPool) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{addr}");
+
+    let svc = IdentityGrpcService::new(pool);
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(IdentityServiceServer::new(svc))
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+
+    url
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_returns_correct_response(pool: PgPool) {
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let email = req.email.clone();
+    let role = req.role.clone();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let response = client
+        .get_user(GetUserRequest {
+            user_id: user_id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(response.id, user_id.to_string());
+    assert_eq!(response.username, username);
+    assert_eq!(response.email, email);
+    assert_eq!(response.role, role);
+    assert!(!response.email_verified);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_verified_email_flag(pool: PgPool) {
+    let req = sample_create_req();
+    let username = req.username.clone();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    crate::common::verify_user_email_directly(&pool, &username).await;
+
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let response = client
+        .get_user(GetUserRequest {
+            user_id: user_id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(response.email_verified);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_nonexistent_returns_not_found(pool: PgPool) {
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let status = client
+        .get_user(GetUserRequest {
+            user_id: Uuid::now_v7().to_string(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(status.code(), Code::NotFound);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_invalid_uuid_returns_invalid_argument(pool: PgPool) {
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let status = client
+        .get_user(GetUserRequest {
+            user_id: "not-a-uuid".to_string(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert!(status.message().contains("Invalid UUID"));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_empty_id_returns_invalid_argument(pool: PgPool) {
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let status = client
+        .get_user(GetUserRequest {
+            user_id: String::new(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(status.code(), Code::InvalidArgument);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_deleted_returns_not_found(pool: PgPool) {
+    let req = sample_create_req();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    // Soft-delete the user
+    sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let url = start_grpc_server(pool).await;
+    let mut client = IdentityServiceClient::connect(url).await.unwrap();
+
+    let status = client
+        .get_user(GetUserRequest {
+            user_id: user_id.to_string(),
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(status.code(), Code::NotFound);
+}

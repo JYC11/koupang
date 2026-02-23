@@ -1078,6 +1078,7 @@ dependencies = [
  "shared",
  "sqlx",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tower",
  "tower-http",
