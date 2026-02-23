@@ -1,3 +1,4 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,11 @@ pub enum AppError {
     BadRequest(String),
 }
 
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
@@ -30,6 +36,6 @@ impl IntoResponse for AppError {
             AppError::AlreadyExists(msg) => (StatusCode::CONFLICT, msg),
         };
 
-        (status, message).into_response()
+        (status, Json(ErrorResponse { error: message })).into_response()
     }
 }

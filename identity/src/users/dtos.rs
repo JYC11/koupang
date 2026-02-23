@@ -1,6 +1,7 @@
 use crate::users::entities::UserEntity;
 use serde::{Deserialize, Serialize};
 use shared::auth::jwt::JwtTokens;
+use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,10 +36,10 @@ pub struct UserRes {
 impl UserRes {
     pub fn new(entity: UserEntity) -> Self {
         Self {
-            id: entity.id.to_string(),
-            created_at: entity.created_at.to_string(),
-            updated_at: entity.updated_at.map(|dt| dt.to_string()),
-            deleted_at: entity.deleted_at.map(|dt| dt.to_string()),
+            id: fmt_id(&entity.id),
+            created_at: fmt_datetime(&entity.created_at),
+            updated_at: fmt_datetime_opt(&entity.updated_at),
+            deleted_at: fmt_datetime_opt(&entity.deleted_at),
             username: entity.username,
             email: entity.email,
             phone: entity.phone,

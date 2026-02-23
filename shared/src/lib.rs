@@ -3,7 +3,12 @@ extern crate core;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod dto_helpers;
 pub mod errors;
+pub mod health;
+pub mod observability;
+pub mod responses;
+pub mod server;
 
 #[derive(Clone)]
 pub struct CommonAppState {

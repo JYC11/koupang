@@ -34,13 +34,45 @@
   - Data owned: Moderation log
 - Shared
   - Responsibility: contains shared libraries/code between services
+  - Reusable modules (use these when building new services):
+    - Bootstrap & Infra:
+      - `server::run_service(ServiceConfig, |pool, common_state| Router)` — full bootstrap (tracing, DB, TCP, serve)
+      - `server::ServiceConfig { name, db_url_env_key, migrations_dir }`
+      - `CommonAppState::new()` — reads PORT env var (default 3000)
+      - `observability::init_tracing(service_name)` — tracing subscriber setup, respects RUST_LOG
+      - `health::health_routes(service_name)` — `GET /health` returning `{ status, service }` JSON
+    - Database (`db`):
+      - `init_db(DbConfig, migrations_dir) -> PgPool` — connect + run migrations
+      - Types: `PgPool`, `PgTx<'a>`, `PgExec<'e>` (executor trait)
+      - `transaction_support::with_transaction(pool, |tx_ctx| async { ... })` — wraps operations in a transaction
+      - `transaction_support::with_nested_transaction(tx_ctx, |tx_ctx| async { ... })` — savepoint-based nesting
+      - `pagination_support::keyset_paginate(params, alias, qb)` — appends pagination clauses to QueryBuilder
+      - `pagination_support::get_cursors(params, rows)` — extracts next/prev cursors from results
+      - `pagination_support::PaginationParams { limit, cursor, direction }`, `PaginationRes<T>`, `HasId` trait
+    - Config (`config`):
+      - `db_config::DbConfig::new(env_key)` — reads DB URL + max connections from env
+      - `auth_config::AuthConfig::new()` — reads JWT secrets + expiry from env (also `::for_tests()`)
+      - `kafka_config::KafkaConfig` — reads Kafka broker URL
+      - `redis_config::RedisConfig` — reads Redis URL
+    - Auth (`auth`):
+      - `jwt::JwtService::new(AuthConfig)` — generate/validate access & refresh tokens
+      - `jwt::CurrentUser { id, role }` — also an axum extractor via FromRequestParts
+      - `jwt::AccessTokenClaims` — also an axum extractor
+      - `jwt::JwtTokens { access_token, refresh_token }`
+      - `middleware::AuthMiddleware::new(Arc<JwtService>, Arc<dyn GetCurrentUser>)` — JWT validation layer
+      - `middleware::GetCurrentUser` trait — implement `async fn get_by_id(id) -> Result<CurrentUser>` per service
+      - `guards::require_access(&current_user, &resource_id)`, `require_admin(&current_user)` — authorization checks
+    - HTTP Responses:
+      - `responses::ok(data)`, `responses::success(status, msg)`, `responses::created(msg)` — standardized JSON responses
+      - `errors::AppError` — variants: NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest; returns `{ "error": "..." }` JSON
+    - DTO Helpers:
+      - `dto_helpers::fmt_id(&Uuid)`, `fmt_datetime(&DateTime<Utc>)`, `fmt_datetime_opt(&Option<DateTime<Utc>>)` — RFC 3339 formatting
 
 ## Tech stack
 
 - rust (most used crates in no particular order)
   - axum
   - sqlx
-    - use the with_transaction method to wrap database operations in a transaction (shared/db/transaction_support.rs)
   - tokio
 - infra
   - postgres

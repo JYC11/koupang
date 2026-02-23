@@ -13,9 +13,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, common_app_state: CommonAppState) -> Self {
         Self {
-            common_app_state: CommonAppState::new(),
+            common_app_state,
             service: Arc::new(UserService::new(pool)),
         }
     }
