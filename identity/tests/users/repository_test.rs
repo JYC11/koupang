@@ -2,6 +2,7 @@ use crate::common::{sample_create_req, sample_create_req_2, sample_update_req};
 use chrono::{Duration, Utc};
 use identity::users::repository::*;
 use shared::db::PgPool;
+use shared::errors::AppError;
 use uuid::Uuid;
 
 #[sqlx::test(migrations = "./migrations")]
@@ -254,4 +255,124 @@ async fn verify_user_email_sets_flag(pool: PgPool) {
     let user = get_user_by_username(&pool, &username).await.unwrap();
     assert!(user.email_verified);
     assert!(user.updated_at.is_some());
+}
+
+// ── Password Reset Token Tests ──────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_by_email_returns_existing(pool: PgPool) {
+    let req = sample_create_req();
+    let email = req.email.clone();
+
+    let mut conn = pool.acquire().await.unwrap();
+    create_user(&mut *conn, req).await.unwrap();
+
+    let user = get_user_by_email(&pool, &email).await.unwrap();
+    assert_eq!(user.email, email);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_by_email_nonexistent_returns_error(pool: PgPool) {
+    let result = get_user_by_email(&pool, "nonexistent@example.com").await;
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), AppError::NotFound(_)));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_password_reset_token_inserts_row(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_password_reset_token(&mut *conn2, user_id, "reset-token-abc", expires_at)
+        .await
+        .unwrap();
+
+    let token_entity = get_valid_password_reset_token(&pool, "reset-token-abc")
+        .await
+        .unwrap();
+    assert_eq!(token_entity.user_id, user_id);
+    assert_eq!(token_entity.token, "reset-token-abc");
+    assert!(token_entity.used_at.is_none());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_valid_password_reset_token_works(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_password_reset_token(&mut *conn2, user_id, "valid-reset-token", expires_at)
+        .await
+        .unwrap();
+
+    let result = get_valid_password_reset_token(&pool, "valid-reset-token").await;
+    assert!(result.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_expired_password_reset_token_fails(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() - Duration::hours(1); // already expired
+    create_password_reset_token(&mut *conn2, user_id, "expired-reset-token", expires_at)
+        .await
+        .unwrap();
+
+    let result = get_valid_password_reset_token(&pool, "expired-reset-token").await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn mark_reset_token_used_sets_used_at(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_password_reset_token(&mut *conn2, user_id, "use-me-reset-token", expires_at)
+        .await
+        .unwrap();
+
+    let token_entity = get_valid_password_reset_token(&pool, "use-me-reset-token")
+        .await
+        .unwrap();
+
+    let mut conn3 = pool.acquire().await.unwrap();
+    mark_reset_token_used(&mut *conn3, token_entity.id)
+        .await
+        .unwrap();
+
+    // Token should no longer be valid (used_at is set)
+    let result = get_valid_password_reset_token(&pool, "use-me-reset-token").await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_user_password_changes_hash(pool: PgPool) {
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let original_user = get_user_by_username(&pool, &username).await.unwrap();
+    let original_password = original_user.password.clone();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    update_user_password(&mut *conn2, user_id, "new-hashed-password")
+        .await
+        .unwrap();
+
+    let updated_user = get_user_by_id(&pool, user_id).await.unwrap();
+    assert_ne!(updated_user.password, original_password);
+    assert_eq!(updated_user.password, "new-hashed-password");
+    assert!(updated_user.updated_at.is_some());
 }

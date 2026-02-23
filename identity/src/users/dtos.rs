@@ -76,3 +76,14 @@ pub struct UserRefreshRes {
 pub struct VerifyEmailReq {
     pub token: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgotPasswordReq {
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetPasswordReq {
+    pub token: String,
+    pub new_password: String,
+}

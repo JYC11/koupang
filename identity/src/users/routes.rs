@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::users::dtos::{
-    UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes,
-    UserUpdateReq, VerifyEmailReq,
+    ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq,
+    UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
 use shared::auth::guards::require_access;
 use shared::auth::jwt::{CurrentUser, JwtTokens};
@@ -28,7 +28,9 @@ pub fn user_routes(app_state: AppState) -> Router {
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/refresh", post(refresh_token))
-        .route("/verify-email", post(verify_email));
+        .route("/verify-email", post(verify_email))
+        .route("/forgot-password", post(forgot_password))
+        .route("/reset-password", post(reset_password));
 
     let protected_routes = Router::new()
         .route("/{id}", get(get_one))
@@ -121,6 +123,28 @@ async fn delete_user(
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User deleted successfully",
+    ))
+}
+
+async fn forgot_password(
+    State(app_state): State<AppState>,
+    Json(req): Json<ForgotPasswordReq>,
+) -> Result<impl IntoResponse, AppError> {
+    app_state.service.forgot_password(req).await?;
+    Ok(responses::success(
+        axum::http::StatusCode::OK,
+        "If the email exists, a password reset link has been sent",
+    ))
+}
+
+async fn reset_password(
+    State(app_state): State<AppState>,
+    Json(req): Json<ResetPasswordReq>,
+) -> Result<impl IntoResponse, AppError> {
+    app_state.service.reset_password(req).await?;
+    Ok(responses::success(
+        axum::http::StatusCode::OK,
+        "Password has been reset successfully",
     ))
 }
 

@@ -1,5 +1,5 @@
 use crate::users::dtos::{UserCreateReq, UserUpdateReq};
-use crate::users::entities::{EmailVerificationTokenEntity, UserEntity};
+use crate::users::entities::{EmailVerificationTokenEntity, PasswordResetTokenEntity, UserEntity};
 use chrono::{DateTime, Utc};
 use shared::db::PgExec;
 use shared::errors::AppError;
@@ -145,6 +145,84 @@ pub async fn delete_user(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("User not found".to_string()));
     }
+
+    Ok(())
+}
+
+// ── Password Reset ──────────────────────────────────────────
+
+pub async fn get_user_by_email<'e>(
+    executor: impl PgExec<'e>,
+    email: &str,
+) -> Result<UserEntity, AppError> {
+    sqlx::query_as::<_, UserEntity>("SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL")
+        .bind(email)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::NotFound(format!("User not found: {}", e)))
+}
+
+pub async fn create_password_reset_token(
+    tx: &mut PgConnection,
+    user_id: Uuid,
+    token: &str,
+    expires_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token, expires_at)
+             VALUES ($1, $2, $3)",
+    )
+    .bind(user_id)
+    .bind(token)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        AppError::InternalServerError(format!("Failed to create password reset token: {}", e))
+    })?;
+
+    Ok(())
+}
+
+pub async fn get_valid_password_reset_token<'e>(
+    executor: impl PgExec<'e>,
+    token: &str,
+) -> Result<PasswordResetTokenEntity, AppError> {
+    sqlx::query_as::<_, PasswordResetTokenEntity>(
+        "SELECT * FROM password_reset_tokens
+             WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()",
+    )
+    .bind(token)
+    .fetch_one(executor)
+    .await
+    .map_err(|_| AppError::BadRequest("Invalid or expired password reset token".to_string()))
+}
+
+pub async fn mark_reset_token_used(tx: &mut PgConnection, token_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1")
+        .bind(token_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to mark reset token as used: {}", e))
+        })?;
+
+    Ok(())
+}
+
+pub async fn update_user_password(
+    tx: &mut PgConnection,
+    user_id: Uuid,
+    hashed_password: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2")
+        .bind(hashed_password)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to update user password: {}", e))
+        })?;
 
     Ok(())
 }

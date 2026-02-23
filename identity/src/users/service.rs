@@ -1,10 +1,12 @@
 use crate::users::dtos::{
-    UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes,
-    UserUpdateReq, VerifyEmailReq,
+    ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq,
+    UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
 use crate::users::repository::{
-    create_user, create_verification_token, delete_user, get_user_by_id, get_user_by_username,
-    get_valid_verification_token, mark_token_used, update_user, verify_user_email,
+    create_password_reset_token, create_user, create_verification_token, delete_user,
+    get_user_by_email, get_user_by_id, get_user_by_username, get_valid_password_reset_token,
+    get_valid_verification_token, mark_reset_token_used, mark_token_used, update_user,
+    update_user_password, verify_user_email,
 };
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
@@ -197,6 +199,73 @@ impl UserService {
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
         Ok(UserRefreshRes { access_token })
+    }
+
+    pub async fn forgot_password(&self, req: ForgotPasswordReq) -> Result<(), AppError> {
+        // Look up user by email — if not found, return Ok silently (don't leak email existence)
+        let user = match get_user_by_email(&self.pool, &req.email).await {
+            Ok(user) => user,
+            Err(_) => return Ok(()),
+        };
+
+        let token = generate_verification_token();
+        let token_clone = token.clone();
+        let user_id = user.id;
+        let expires_at = Utc::now() + Duration::hours(24);
+
+        with_transaction(&self.pool, |tx| {
+            Box::pin(async move {
+                create_password_reset_token(tx.as_executor(), user_id, &token_clone, expires_at)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to create password reset token: {}", e))
+        })?;
+
+        let email_message = EmailMessage {
+            to: req.email,
+            subject: "Reset your password".to_string(),
+            body_html: format!(
+                "<h1>Password Reset</h1><p>Your password reset token is: <strong>{}</strong></p>",
+                token
+            ),
+        };
+        if let Err(e) = self.email_service.send_email(email_message).await {
+            tracing::error!(error = %e, "Failed to send password reset email");
+        }
+
+        Ok(())
+    }
+
+    pub async fn reset_password(&self, req: ResetPasswordReq) -> Result<(), AppError> {
+        let token_entity = get_valid_password_reset_token(&self.pool, &req.token).await?;
+        let hashed_password = hash_password(&req.new_password)?;
+
+        let token_id = token_entity.id;
+        let user_id = token_entity.user_id;
+
+        with_transaction(&self.pool, |tx| {
+            let hashed = hashed_password.clone();
+            Box::pin(async move {
+                update_user_password(tx.as_executor(), user_id, &hashed)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+
+                mark_reset_token_used(tx.as_executor(), token_id)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to reset password: {}", e)))?;
+
+        Ok(())
     }
 }
 

@@ -546,3 +546,131 @@ async fn verify_email_with_invalid_token_returns_error(pool: PgPool) {
         resp.status()
     );
 }
+
+// ── Password Reset Tests ────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn forgot_password_returns_200(pool: PgPool) {
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register a user first
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    let forgot_req = serde_json::json!({ "email": req.email });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/forgot-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&forgot_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn forgot_password_nonexistent_email_returns_200(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let forgot_req = serde_json::json!({ "email": "nonexistent@example.com" });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/forgot-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&forgot_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "Should return 200 even for nonexistent email (no leak)"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reset_password_with_valid_token_returns_200(pool: PgPool) {
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    // Forgot password
+    let forgot_req = serde_json::json!({ "email": req.email });
+    router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/forgot-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&forgot_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Get the reset token from DB
+    let row: (String,) = sqlx::query_as("SELECT token FROM password_reset_tokens LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Reset password
+    let reset_req = serde_json::json!({ "token": row.0, "new_password": "newpass123" });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/reset-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&reset_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reset_password_with_invalid_token_returns_error(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let reset_req = serde_json::json!({ "token": "bad-token", "new_password": "newpass123" });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/reset-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&reset_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "Expected client error for invalid reset token, got {}",
+        resp.status()
+    );
+}

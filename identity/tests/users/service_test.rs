@@ -1,7 +1,7 @@
 use crate::common::{
     sample_create_req, sample_update_req, test_user_service, verify_user_email_directly,
 };
-use identity::users::dtos::{UserLoginReq, UserRefreshReq};
+use identity::users::dtos::{ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq};
 use shared::auth::middleware::GetCurrentUser;
 use shared::db::PgPool;
 use uuid::Uuid;
@@ -249,4 +249,94 @@ async fn create_user_generates_verification_token(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(count.0, 1, "Should have created one verification token");
+}
+
+// ── Password Reset Tests ────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn forgot_password_with_valid_email_creates_token(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let email = req.email.clone();
+    service.create_user(req).await.unwrap();
+
+    let result = service.forgot_password(ForgotPasswordReq { email }).await;
+    assert!(result.is_ok());
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM password_reset_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 1, "Should have created one password reset token");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn forgot_password_with_invalid_email_does_not_fail(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+
+    let result = service
+        .forgot_password(ForgotPasswordReq {
+            email: "nonexistent@example.com".to_string(),
+        })
+        .await;
+    assert!(result.is_ok(), "Should not fail for nonexistent email");
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM password_reset_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0, "Should not have created any token");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reset_password_with_valid_token_succeeds(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let email = req.email.clone();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    // Trigger forgot password to create a token
+    service
+        .forgot_password(ForgotPasswordReq { email })
+        .await
+        .unwrap();
+
+    // Get the token from DB
+    let row: (String,) = sqlx::query_as("SELECT token FROM password_reset_tokens LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Reset the password
+    let result = service
+        .reset_password(ResetPasswordReq {
+            token: row.0,
+            new_password: "newpassword456".to_string(),
+        })
+        .await;
+    assert!(result.is_ok());
+
+    // Verify the new password works by logging in
+    verify_user_email_directly(&pool, &username).await;
+    let login_result = service
+        .login_user(UserLoginReq {
+            username,
+            password: "newpassword456".to_string(),
+        })
+        .await;
+    assert!(login_result.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reset_password_with_invalid_token_fails(pool: PgPool) {
+    let service = test_user_service(pool);
+
+    let result = service
+        .reset_password(ResetPasswordReq {
+            token: "invalid-token-does-not-exist".to_string(),
+            new_password: "newpassword456".to_string(),
+        })
+        .await;
+    assert!(result.is_err());
 }
