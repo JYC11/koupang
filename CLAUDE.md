@@ -43,6 +43,8 @@
   - tokio
 - infra
   - postgres
+    - using version 18
+    - using uuid v7 as a primary key
   - redis
 - containerization
   - docker
@@ -68,6 +70,7 @@
 
 ## Scripts
 - refer to the Makefile
+  - has scripts for running tests and creating empty migration files
 
 ## Task management
 
