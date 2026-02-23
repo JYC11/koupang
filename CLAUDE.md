@@ -66,6 +66,10 @@
 - Background jobs: https://crates.io/crates/aj
 - CQRS
 
+## Scripts
+- refer to the Makefile
+
 ## Task management
 
 - beads_rust: https://github.com/Dicklesworthstone/beads_rust
+  - br skill has been created for use

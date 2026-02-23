@@ -58,6 +58,12 @@ pub struct CurrentUser {
     pub role: String,
 }
 
+impl CurrentUser {
+    pub fn can_access(&self, target_user_id: &Uuid) -> bool {
+        self.id == *target_user_id || self.role == "ADMIN"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtTokens {
     pub access_token: String,

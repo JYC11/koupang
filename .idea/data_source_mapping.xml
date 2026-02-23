@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="DataSourcePerFileMappings">
-    <file url="file://$PROJECT_DIR$/identity/migrations/202602231254_create_users_table.sql" value="8ae99421-7502-45ca-a341-ef842eb37e8e" />
     <file url="file://$APPLICATION_CONFIG_DIR$/consoles/db/8ae99421-7502-45ca-a341-ef842eb37e8e/console.sql" value="8ae99421-7502-45ca-a341-ef842eb37e8e" />
   </component>
 </project>
