@@ -1,6 +1,6 @@
 use crate::users::dtos::{
-    ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq,
-    UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
+    ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq,
+    UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
 use crate::users::repository::{
     create_password_reset_token, create_user, create_verification_token, delete_user,
@@ -264,6 +264,40 @@ impl UserService {
         })
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to reset password: {}", e)))?;
+
+        Ok(())
+    }
+
+    pub async fn change_password(
+        &self,
+        user_id: Uuid,
+        req: ChangePasswordReq,
+    ) -> Result<(), AppError> {
+        let user = get_user_by_id(&self.pool, user_id).await?;
+
+        // Verify current password
+        verify_password(&req.current_password, &user.password)?;
+
+        // Ensure new password is different
+        if req.current_password == req.new_password {
+            return Err(AppError::BadRequest(
+                "New password must be different from the current password".to_string(),
+            ));
+        }
+
+        let hashed_password = hash_password(&req.new_password)?;
+
+        with_transaction(&self.pool, |tx| {
+            let hashed = hashed_password.clone();
+            Box::pin(async move {
+                update_user_password(tx.as_executor(), user_id, &hashed)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to change password: {}", e)))?;
 
         Ok(())
     }

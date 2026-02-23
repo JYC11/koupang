@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::users::dtos::{
-    ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq,
-    UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
+    ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq,
+    UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
 use shared::auth::guards::require_access;
 use shared::auth::jwt::{CurrentUser, JwtTokens};
@@ -36,6 +36,7 @@ pub fn user_routes(app_state: AppState) -> Router {
         .route("/{id}", get(get_one))
         .route("/{id}", put(update))
         .route("/{id}", delete(delete_user))
+        .route("/change-password", post(change_password))
         .layer(axum::middleware::from_fn(move |req, next| {
             auth_middleware.clone().handle(req, next)
         }));
@@ -123,6 +124,21 @@ async fn delete_user(
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User deleted successfully",
+    ))
+}
+
+async fn change_password(
+    State(app_state): State<AppState>,
+    current_user: CurrentUser,
+    Json(req): Json<ChangePasswordReq>,
+) -> Result<impl IntoResponse, AppError> {
+    app_state
+        .service
+        .change_password(current_user.id, req)
+        .await?;
+    Ok(responses::success(
+        axum::http::StatusCode::OK,
+        "Password changed successfully",
     ))
 }
 

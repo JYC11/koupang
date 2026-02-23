@@ -1,7 +1,9 @@
 use crate::common::{
     sample_create_req, sample_update_req, test_user_service, verify_user_email_directly,
 };
-use identity::users::dtos::{ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq};
+use identity::users::dtos::{
+    ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq,
+};
 use shared::auth::middleware::GetCurrentUser;
 use shared::db::PgPool;
 use uuid::Uuid;
@@ -339,4 +341,87 @@ async fn reset_password_with_invalid_token_fails(pool: PgPool) {
         })
         .await;
     assert!(result.is_err());
+}
+
+// ── Password Change Tests ───────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_with_correct_current_succeeds(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let password = req.password.clone();
+    service.create_user(req).await.unwrap();
+
+    let user = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    let result = service
+        .change_password(
+            user.id,
+            ChangePasswordReq {
+                current_password: password,
+                new_password: "newpassword456".to_string(),
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    // Verify login works with new password
+    verify_user_email_directly(&pool, &username).await;
+    let login_result = service
+        .login_user(UserLoginReq {
+            username,
+            password: "newpassword456".to_string(),
+        })
+        .await;
+    assert!(login_result.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_with_wrong_current_fails(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    let user = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    let result = service
+        .change_password(
+            user.id,
+            ChangePasswordReq {
+                current_password: "wrongpassword".to_string(),
+                new_password: "newpassword456".to_string(),
+            },
+        )
+        .await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_same_as_current_fails(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let password = req.password.clone();
+    service.create_user(req).await.unwrap();
+
+    let user = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    let result = service
+        .change_password(
+            user.id,
+            ChangePasswordReq {
+                current_password: password.clone(),
+                new_password: password,
+            },
+        )
+        .await;
+    assert!(result.is_err(), "Should reject same password");
 }

@@ -87,3 +87,9 @@ pub struct ResetPasswordReq {
     pub token: String,
     pub new_password: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangePasswordReq {
+    pub current_password: String,
+    pub new_password: String,
+}

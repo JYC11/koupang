@@ -674,3 +674,114 @@ async fn reset_password_with_invalid_token_returns_error(pool: PgPool) {
         resp.status()
     );
 }
+
+// ── Password Change Tests ───────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_returns_200(pool: PgPool) {
+    let req = sample_create_req();
+    let (access_token, _, _) = register_and_login(&pool, &req).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let change_req = serde_json::json!({
+        "current_password": req.password,
+        "new_password": "newpassword456"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/change-password")
+                .method("POST")
+                .header("authorization", format!("Bearer {}", access_token))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&change_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_wrong_current_returns_error(pool: PgPool) {
+    let req = sample_create_req();
+    let (access_token, _, _) = register_and_login(&pool, &req).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let change_req = serde_json::json!({
+        "current_password": "wrongpassword",
+        "new_password": "newpassword456"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/change-password")
+                .method("POST")
+                .header("authorization", format!("Bearer {}", access_token))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&change_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "Expected client error for wrong current password, got {}",
+        resp.status()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_same_password_returns_error(pool: PgPool) {
+    let req = sample_create_req();
+    let (access_token, _, _) = register_and_login(&pool, &req).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let change_req = serde_json::json!({
+        "current_password": req.password,
+        "new_password": req.password
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/change-password")
+                .method("POST")
+                .header("authorization", format!("Bearer {}", access_token))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&change_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "Expected client error for same password, got {}",
+        resp.status()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_without_auth_returns_401(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let change_req = serde_json::json!({
+        "current_password": "password123",
+        "new_password": "newpassword456"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/change-password")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&change_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
