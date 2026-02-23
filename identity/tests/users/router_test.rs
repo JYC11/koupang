@@ -4,27 +4,12 @@ use crate::common::{
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
 use identity::app;
 use identity::users::dtos::{UserCreateReq, UserLoginReq};
 use shared::auth::jwt::JwtTokens;
 use shared::db::PgPool;
+use shared::test_utils::http::{body_bytes, body_json};
 use tower::ServiceExt;
-
-async fn body_bytes(response: axum::http::Response<Body>) -> Vec<u8> {
-    response
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes()
-        .to_vec()
-}
-
-async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
-    let bytes = body_bytes(response).await;
-    serde_json::from_slice(&bytes).unwrap()
-}
 
 fn register_request(req: &UserCreateReq) -> Request<Body> {
     Request::builder()

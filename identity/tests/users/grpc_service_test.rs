@@ -5,26 +5,14 @@ use shared::db::PgPool;
 use shared::grpc::identity::GetUserRequest;
 use shared::grpc::identity::identity_service_client::IdentityServiceClient;
 use shared::grpc::identity::identity_service_server::IdentityServiceServer;
-use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
+use shared::test_utils::grpc::start_test_grpc_server;
 use tonic::Code;
 use uuid::Uuid;
 
 async fn start_grpc_server(pool: PgPool) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let url = format!("http://{addr}");
-
     let svc = IdentityGrpcService::new(pool);
-    tokio::spawn(async move {
-        tonic::transport::Server::builder()
-            .add_service(IdentityServiceServer::new(svc))
-            .serve_with_incoming(TcpListenerStream::new(listener))
-            .await
-            .unwrap();
-    });
-
-    url
+    let router = tonic::transport::Server::builder().add_service(IdentityServiceServer::new(svc));
+    start_test_grpc_server(router).await
 }
 
 #[sqlx::test(migrations = "./migrations")]

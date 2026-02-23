@@ -1,6 +1,6 @@
 use crate::common::{
-    sample_create_req, sample_update_req, start_test_redis, test_user_service,
-    test_user_service_with_redis, verify_user_email_directly,
+    sample_create_req, sample_update_req, test_user_service, test_user_service_with_redis,
+    verify_user_email_directly,
 };
 use identity::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq,
@@ -8,6 +8,7 @@ use identity::users::dtos::{
 use redis::AsyncCommands;
 use shared::auth::middleware::GetCurrentUser;
 use shared::db::PgPool;
+use shared::test_utils::redis::TestRedis;
 use uuid::Uuid;
 
 #[sqlx::test(migrations = "./migrations")]
@@ -432,14 +433,14 @@ async fn change_password_same_as_current_fails(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn get_by_id_caches_user_in_redis(pool: PgPool) {
-    let (redis_conn, _container) = start_test_redis().await;
-    let mut assert_conn = redis_conn.clone();
+    let test_redis = TestRedis::start().await;
+    let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
     let service = identity::users::service::UserService::new_with_config(
         pool.clone(),
         crate::common::test_auth_config(),
         email_service,
-        Some(redis_conn),
+        Some(test_redis.conn.clone()),
     );
 
     let req = sample_create_req();
@@ -467,7 +468,7 @@ async fn get_by_id_caches_user_in_redis(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn get_by_id_cache_hit_returns_same_data(pool: PgPool) {
-    let (service, _container) = test_user_service_with_redis(pool.clone()).await;
+    let (service, _test_redis) = test_user_service_with_redis(pool.clone()).await;
 
     let req = sample_create_req();
     let username = req.username.clone();
@@ -488,14 +489,14 @@ async fn get_by_id_cache_hit_returns_same_data(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn update_user_evicts_cache(pool: PgPool) {
-    let (redis_conn, _container) = start_test_redis().await;
-    let mut assert_conn = redis_conn.clone();
+    let test_redis = TestRedis::start().await;
+    let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
     let service = identity::users::service::UserService::new_with_config(
         pool.clone(),
         crate::common::test_auth_config(),
         email_service,
-        Some(redis_conn),
+        Some(test_redis.conn.clone()),
     );
 
     let req = sample_create_req();
@@ -524,14 +525,14 @@ async fn update_user_evicts_cache(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn delete_user_evicts_cache(pool: PgPool) {
-    let (redis_conn, _container) = start_test_redis().await;
-    let mut assert_conn = redis_conn.clone();
+    let test_redis = TestRedis::start().await;
+    let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
     let service = identity::users::service::UserService::new_with_config(
         pool.clone(),
         crate::common::test_auth_config(),
         email_service,
-        Some(redis_conn),
+        Some(test_redis.conn.clone()),
     );
 
     let req = sample_create_req();
@@ -561,14 +562,14 @@ async fn delete_user_evicts_cache(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn change_password_evicts_cache(pool: PgPool) {
-    let (redis_conn, _container) = start_test_redis().await;
-    let mut assert_conn = redis_conn.clone();
+    let test_redis = TestRedis::start().await;
+    let mut assert_conn = test_redis.conn.clone();
     let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
     let service = identity::users::service::UserService::new_with_config(
         pool.clone(),
         crate::common::test_auth_config(),
         email_service,
-        Some(redis_conn),
+        Some(test_redis.conn.clone()),
     );
 
     let req = sample_create_req();

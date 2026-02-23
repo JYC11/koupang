@@ -12,3 +12,6 @@ pub mod health;
 pub mod observability;
 pub mod responses;
 pub mod server;
+
+#[cfg(feature = "test-utils")]
+pub mod test_utils;

@@ -4,10 +4,8 @@ use identity::users::service::UserService;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::email::MockEmailService;
+use shared::test_utils::redis::TestRedis;
 use std::sync::Arc;
-use testcontainers_modules::redis::{REDIS_PORT, Redis};
-use testcontainers_modules::testcontainers::ContainerAsync;
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
 
 pub fn test_auth_config() -> AuthConfig {
     AuthConfig {
@@ -74,20 +72,14 @@ pub fn sample_update_req() -> UserUpdateReq {
     }
 }
 
-pub async fn start_test_redis() -> (redis::aio::ConnectionManager, ContainerAsync<Redis>) {
-    let container = Redis::default().start().await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let port = container.get_host_port_ipv4(REDIS_PORT).await.unwrap();
-    let url = format!("redis://{host}:{port}");
-    let client = redis::Client::open(url.as_str()).unwrap();
-    let conn = redis::aio::ConnectionManager::new(client).await.unwrap();
-    (conn, container)
-}
-
-pub async fn test_user_service_with_redis(pool: PgPool) -> (UserService, ContainerAsync<Redis>) {
-    let (redis_conn, container) = start_test_redis().await;
+pub async fn test_user_service_with_redis(pool: PgPool) -> (UserService, TestRedis) {
+    let test_redis = TestRedis::start().await;
     let email_service = Arc::new(MockEmailService::new());
-    let service =
-        UserService::new_with_config(pool, test_auth_config(), email_service, Some(redis_conn));
-    (service, container)
+    let service = UserService::new_with_config(
+        pool,
+        test_auth_config(),
+        email_service,
+        Some(test_redis.conn.clone()),
+    );
+    (service, test_redis)
 }
