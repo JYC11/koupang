@@ -1,5 +1,6 @@
 use shared::CommonAppState;
 use shared::db::PgPool;
+use shared::email::MockEmailService;
 use std::sync::Arc;
 use users::routes::user_routes;
 use users::service::UserService;
@@ -14,9 +15,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(pool: PgPool, common_app_state: CommonAppState) -> Self {
+        let email_service = Arc::new(MockEmailService::new());
         Self {
             common_app_state,
-            service: Arc::new(UserService::new(pool)),
+            service: Arc::new(UserService::new(pool, email_service)),
         }
     }
 

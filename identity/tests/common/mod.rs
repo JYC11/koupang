@@ -3,6 +3,8 @@ use identity::users::dtos::{UserCreateReq, UserUpdateReq};
 use identity::users::service::UserService;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
+use shared::email::MockEmailService;
+use std::sync::Arc;
 
 pub fn test_auth_config() -> AuthConfig {
     AuthConfig {
@@ -14,7 +16,16 @@ pub fn test_auth_config() -> AuthConfig {
 }
 
 pub fn test_user_service(pool: PgPool) -> UserService {
-    UserService::new_with_config(pool, test_auth_config())
+    let email_service = Arc::new(MockEmailService::new());
+    UserService::new_with_config(pool, test_auth_config(), email_service)
+}
+
+pub async fn verify_user_email_directly(pool: &PgPool, username: &str) {
+    sqlx::query("UPDATE users SET email_verified = TRUE WHERE username = $1")
+        .bind(username)
+        .execute(pool)
+        .await
+        .expect("Failed to verify user email directly");
 }
 
 pub fn test_app_state(pool: PgPool) -> AppState {

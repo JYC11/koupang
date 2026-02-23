@@ -1,4 +1,6 @@
-use crate::common::{sample_create_req, sample_update_req, test_user_service};
+use crate::common::{
+    sample_create_req, sample_update_req, test_user_service, verify_user_email_directly,
+};
 use identity::users::dtos::{UserLoginReq, UserRefreshReq};
 use shared::auth::middleware::GetCurrentUser;
 use shared::db::PgPool;
@@ -95,11 +97,13 @@ async fn delete_user_makes_unfetchable(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn login_correct_credentials_returns_tokens(pool: PgPool) {
-    let service = test_user_service(pool);
+    let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
     let password = req.password.clone();
     service.create_user(req).await.unwrap();
+
+    verify_user_email_directly(&pool, &username).await;
 
     let login_req = UserLoginReq { username, password };
     let result = service.login_user(login_req).await.unwrap();
@@ -143,11 +147,13 @@ async fn login_nonexistent_username_fails(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn refresh_token_returns_new_access_token(pool: PgPool) {
-    let service = test_user_service(pool);
+    let service = test_user_service(pool.clone());
     let req = sample_create_req();
     let username = req.username.clone();
     let password = req.password.clone();
     service.create_user(req).await.unwrap();
+
+    verify_user_email_directly(&pool, &username).await;
 
     let login_res = service
         .login_user(UserLoginReq { username, password })
@@ -193,4 +199,54 @@ async fn get_current_user_returns_correct_user(pool: PgPool) {
     let current_user = service.get_by_id(entity.id).await.unwrap();
     assert_eq!(current_user.id, entity.id);
     assert_eq!(current_user.role, role);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_unverified_user_fails(pool: PgPool) {
+    let service = test_user_service(pool);
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let password = req.password.clone();
+    service.create_user(req).await.unwrap();
+
+    let login_req = UserLoginReq { username, password };
+    let result = service.login_user(login_req).await;
+    assert!(result.is_err(), "Login should fail for unverified user");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn verify_email_sets_email_verified(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    // Get the token from DB
+    let row: (String,) = sqlx::query_as("SELECT token FROM email_verification_tokens LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    service
+        .verify_email(identity::users::dtos::VerifyEmailReq { token: row.0 })
+        .await
+        .unwrap();
+
+    let user = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+    assert!(user.email_verified);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_user_generates_verification_token(pool: PgPool) {
+    let service = test_user_service(pool.clone());
+    let req = sample_create_req();
+    service.create_user(req).await.unwrap();
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM email_verification_tokens")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 1, "Should have created one verification token");
 }

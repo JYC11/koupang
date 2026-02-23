@@ -174,11 +174,22 @@ Each flow highlights **Synchronous** (HTTP/gRPC) vs. **Asynchronous** (Events) b
   - Could be up to change, so it's not enums right now
 - User Registration
   - sends verification email after registration
+    - a simple HTML email with a link
   - needs to verify email before login
 - User Password Reset
   - sends reset link to email
+    - same as above, a simple HTML email with a link
 - User Password Change
   - requires current and new password
+  - the new password cannot be the same as the old one
+- Email interface
+  - no actual implementation yet, just a simple mocked implementation for now
+  - just need a trait interface
+
+#### Technical enhancements for auth flows:
+- Using GRPC for internal api (get_one_for_auth should be a grpc call)
+- Adding a caching layer for the internal api (get_one_for_auth) using redis
+- For email sending, use event driven architecture with the ruva package
 
 # Architecture Diagram Logic (Mental Model)
 

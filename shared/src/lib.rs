@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod dto_helpers;
+pub mod email;
 pub mod errors;
 pub mod health;
 pub mod observability;

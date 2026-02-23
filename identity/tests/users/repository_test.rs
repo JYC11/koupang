@@ -1,4 +1,5 @@
 use crate::common::{sample_create_req, sample_create_req_2, sample_update_req};
+use chrono::{Duration, Utc};
 use identity::users::repository::*;
 use shared::db::PgPool;
 use uuid::Uuid;
@@ -12,7 +13,7 @@ async fn create_user_inserts_row(pool: PgPool) {
     let role = req.role.clone();
 
     let mut conn = pool.acquire().await.unwrap();
-    create_user(&mut *conn, req).await.unwrap();
+    let _id = create_user(&mut *conn, req).await.unwrap();
 
     let user = get_user_by_username(&pool, &username).await.unwrap();
     assert_eq!(user.username, username);
@@ -29,7 +30,7 @@ async fn create_user_duplicate_username_fails(pool: PgPool) {
     req2.username = req1.username.clone();
 
     let mut conn = pool.acquire().await.unwrap();
-    create_user(&mut *conn, req1).await.unwrap();
+    let _id = create_user(&mut *conn, req1).await.unwrap();
 
     let mut conn2 = pool.acquire().await.unwrap();
     let result = create_user(&mut *conn2, req2).await;
@@ -43,7 +44,7 @@ async fn create_user_duplicate_email_fails(pool: PgPool) {
     req2.email = req1.email.clone();
 
     let mut conn = pool.acquire().await.unwrap();
-    create_user(&mut *conn, req1).await.unwrap();
+    let _id = create_user(&mut *conn, req1).await.unwrap();
 
     let mut conn2 = pool.acquire().await.unwrap();
     let result = create_user(&mut *conn2, req2).await;
@@ -148,4 +149,109 @@ async fn delete_nonexistent_user_returns_error(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let result = delete_user(&mut *conn, Uuid::new_v4()).await;
     assert!(result.is_err());
+}
+
+// ── Email Verification Token Tests ──────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn new_user_has_email_verified_false(pool: PgPool) {
+    let req = sample_create_req();
+    let username = req.username.clone();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let _id = create_user(&mut *conn, req).await.unwrap();
+
+    let user = get_user_by_username(&pool, &username).await.unwrap();
+    assert!(!user.email_verified);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_verification_token_inserts_row(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_verification_token(&mut *conn2, user_id, "test-token-abc", expires_at)
+        .await
+        .unwrap();
+
+    let token_entity = get_valid_verification_token(&pool, "test-token-abc")
+        .await
+        .unwrap();
+    assert_eq!(token_entity.user_id, user_id);
+    assert_eq!(token_entity.token, "test-token-abc");
+    assert!(token_entity.used_at.is_none());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_valid_verification_token_works(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_verification_token(&mut *conn2, user_id, "valid-token", expires_at)
+        .await
+        .unwrap();
+
+    let result = get_valid_verification_token(&pool, "valid-token").await;
+    assert!(result.is_ok());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_expired_verification_token_fails(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() - Duration::hours(1); // already expired
+    create_verification_token(&mut *conn2, user_id, "expired-token", expires_at)
+        .await
+        .unwrap();
+
+    let result = get_valid_verification_token(&pool, "expired-token").await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn mark_token_used_sets_used_at(pool: PgPool) {
+    let req = sample_create_req();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    let expires_at = Utc::now() + Duration::hours(24);
+    create_verification_token(&mut *conn2, user_id, "use-me-token", expires_at)
+        .await
+        .unwrap();
+
+    let token_entity = get_valid_verification_token(&pool, "use-me-token")
+        .await
+        .unwrap();
+
+    let mut conn3 = pool.acquire().await.unwrap();
+    mark_token_used(&mut *conn3, token_entity.id).await.unwrap();
+
+    // Token should no longer be valid (used_at is set)
+    let result = get_valid_verification_token(&pool, "use-me-token").await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn verify_user_email_sets_flag(pool: PgPool) {
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let mut conn = pool.acquire().await.unwrap();
+    let user_id = create_user(&mut *conn, req).await.unwrap();
+
+    let mut conn2 = pool.acquire().await.unwrap();
+    verify_user_email(&mut *conn2, user_id).await.unwrap();
+
+    let user = get_user_by_username(&pool, &username).await.unwrap();
+    assert!(user.email_verified);
+    assert!(user.updated_at.is_some());
 }

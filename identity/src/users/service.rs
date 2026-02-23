@@ -1,56 +1,113 @@
 use crate::users::dtos::{
     UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes,
-    UserUpdateReq,
+    UserUpdateReq, VerifyEmailReq,
 };
 use crate::users::repository::{
-    create_user, delete_user, get_user_by_id, get_user_by_username, update_user,
+    create_user, create_verification_token, delete_user, get_user_by_id, get_user_by_username,
+    get_valid_verification_token, mark_token_used, update_user, verify_user_email,
 };
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use chrono::{Duration, Utc};
 use shared::auth::jwt::{CurrentUser, JwtService, JwtTokens};
 use shared::auth::middleware::GetCurrentUser;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::db::transaction_support::{TxError, with_transaction};
+use shared::email::{EmailMessage, EmailService};
 use shared::errors::AppError;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct UserService {
     pool: PgPool,
     pub jwt_service: JwtService,
+    email_service: Arc<dyn EmailService>,
 }
 
 impl UserService {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, email_service: Arc<dyn EmailService>) -> Self {
         Self {
             pool: pool.clone(),
             jwt_service: JwtService::new(AuthConfig::new()),
+            email_service,
         }
     }
 
-    pub fn new_with_config(pool: PgPool, auth_config: AuthConfig) -> Self {
+    pub fn new_with_config(
+        pool: PgPool,
+        auth_config: AuthConfig,
+        email_service: Arc<dyn EmailService>,
+    ) -> Self {
         Self {
             pool: pool.clone(),
             jwt_service: JwtService::new(auth_config),
+            email_service,
         }
     }
 
     pub async fn create_user(&self, req: UserCreateReq) -> Result<(), AppError> {
         let hashed_password = hash_password(&req.password)?;
+        let email = req.email.clone();
         let mut user_req = req;
         user_req.password = hashed_password;
 
+        let token = generate_verification_token();
+        let token_clone = token.clone();
+        let expires_at = Utc::now() + Duration::hours(24);
+
         with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                create_user(tx.as_executor(), user_req)
+                let user_id = create_user(tx.as_executor(), user_req)
                     .await
                     .map_err(|e| TxError::Other(e.to_string()))?;
+
+                create_verification_token(tx.as_executor(), user_id, &token_clone, expires_at)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+
                 Ok(())
             })
         })
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to create user: {}", e)))?;
+
+        let email_message = EmailMessage {
+            to: email,
+            subject: "Verify your email address".to_string(),
+            body_html: format!(
+                "<h1>Email Verification</h1><p>Your verification token is: <strong>{}</strong></p>",
+                token
+            ),
+        };
+        if let Err(e) = self.email_service.send_email(email_message).await {
+            tracing::error!(error = %e, "Failed to send verification email");
+        }
+
+        Ok(())
+    }
+
+    pub async fn verify_email(&self, req: VerifyEmailReq) -> Result<(), AppError> {
+        let token_entity = get_valid_verification_token(&self.pool, &req.token).await?;
+
+        with_transaction(&self.pool, |tx| {
+            let token_id = token_entity.id;
+            let user_id = token_entity.user_id;
+            Box::pin(async move {
+                verify_user_email(tx.as_executor(), user_id)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+
+                mark_token_used(tx.as_executor(), token_id)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
+
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to verify email: {}", e)))?;
 
         Ok(())
     }
@@ -93,6 +150,13 @@ impl UserService {
     pub async fn login_user(&self, req: UserLoginReq) -> Result<UserLoginRes, AppError> {
         // Find user by username/email
         let user = get_user_by_username(&self.pool, &req.username).await?;
+
+        // Check email verification
+        if !user.email_verified {
+            return Err(AppError::Forbidden(
+                "Please verify your email before logging in".to_string(),
+            ));
+        }
 
         // Verify password
         verify_password(&req.password, &user.password)?;
@@ -147,6 +211,11 @@ impl GetCurrentUser for UserService {
             role: user.role,
         })
     }
+}
+
+fn generate_verification_token() -> String {
+    let bytes: [u8; 32] = rand::random();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Hash a plaintext password using Argon2

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::users::dtos::{
     UserCreateReq, UserLoginReq, UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes,
-    UserUpdateReq,
+    UserUpdateReq, VerifyEmailReq,
 };
 use shared::auth::guards::require_access;
 use shared::auth::jwt::{CurrentUser, JwtTokens};
@@ -27,7 +27,8 @@ pub fn user_routes(app_state: AppState) -> Router {
     let public_routes = Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
-        .route("/refresh", post(refresh_token));
+        .route("/refresh", post(refresh_token))
+        .route("/verify-email", post(verify_email));
 
     let protected_routes = Router::new()
         .route("/{id}", get(get_one))
@@ -73,6 +74,17 @@ async fn refresh_token(
 ) -> Result<Json<UserRefreshRes>, AppError> {
     let response = app_state.service.generate_refresh_token(req).await?;
     Ok(Json(response))
+}
+
+async fn verify_email(
+    State(app_state): State<AppState>,
+    Json(req): Json<VerifyEmailReq>,
+) -> Result<impl IntoResponse, AppError> {
+    app_state.service.verify_email(req).await?;
+    Ok(responses::success(
+        axum::http::StatusCode::OK,
+        "Email verified successfully",
+    ))
 }
 
 async fn get_one(

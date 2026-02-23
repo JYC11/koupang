@@ -31,6 +31,7 @@ pub struct UserRes {
     pub email: String,
     pub phone: String,
     pub role: String,
+    pub email_verified: bool,
 }
 
 impl UserRes {
@@ -44,6 +45,7 @@ impl UserRes {
             email: entity.email,
             phone: entity.phone,
             role: entity.role,
+            email_verified: entity.email_verified,
         }
     }
 }
@@ -68,4 +70,9 @@ pub struct UserRefreshReq {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRefreshRes {
     pub access_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyEmailReq {
+    pub token: String,
 }

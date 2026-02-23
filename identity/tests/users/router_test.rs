@@ -1,5 +1,6 @@
 use crate::common::{
     admin_create_req, sample_create_req, sample_create_req_2, sample_update_req, test_app_state,
+    verify_user_email_directly,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -56,6 +57,9 @@ async fn register_and_login(pool: &PgPool, req: &UserCreateReq) -> (String, Stri
     let resp = router.clone().oneshot(register_request(req)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
+    // Verify email directly in DB so login succeeds
+    verify_user_email_directly(pool, &req.username).await;
+
     // Login
     let resp = router
         .clone()
@@ -64,27 +68,6 @@ async fn register_and_login(pool: &PgPool, req: &UserCreateReq) -> (String, Stri
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let tokens: JwtTokens = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-
-    // Get user id from the token by fetching the user
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/users/login")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::to_string(&UserLoginReq {
-                        username: req.username.clone(),
-                        password: req.password.clone(),
-                    })
-                    .unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let _ = body_bytes(resp).await;
 
     // Get user id via internal endpoint - find the user
     let user = identity::users::repository::get_user_by_username(pool, &req.username)
@@ -154,7 +137,7 @@ async fn register_missing_fields_returns_422(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn login_returns_tokens(pool: PgPool) {
-    let state = test_app_state(pool);
+    let state = test_app_state(pool.clone());
     let router = app(state);
     let req = sample_create_req();
 
@@ -164,6 +147,9 @@ async fn login_returns_tokens(pool: PgPool) {
         .oneshot(register_request(&req))
         .await
         .unwrap();
+
+    // Verify email
+    verify_user_email_directly(&pool, &req.username).await;
 
     // Login
     let resp = router
@@ -478,4 +464,85 @@ async fn internal_get_nonexistent_returns_404(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// ── Email Verification Tests ────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_unverified_email_returns_403(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register but do NOT verify email
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    // Attempt login
+    let resp = router
+        .oneshot(login_request(&req.username, &req.password))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn verify_email_with_valid_token_returns_200(pool: PgPool) {
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    // Get the token from the DB
+    let row: (String,) = sqlx::query_as("SELECT token FROM email_verification_tokens LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let verify_req = serde_json::json!({ "token": row.0 });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/verify-email")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&verify_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn verify_email_with_invalid_token_returns_error(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let verify_req = serde_json::json!({ "token": "invalid-token-that-does-not-exist" });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/verify-email")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&verify_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "Expected client error for invalid token, got {}",
+        resp.status()
+    );
 }

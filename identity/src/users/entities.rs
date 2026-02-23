@@ -13,4 +13,15 @@ pub struct UserEntity {
     pub email: String,
     pub phone: String,
     pub role: String,
+    pub email_verified: bool,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct EmailVerificationTokenEntity {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub user_id: Uuid,
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
 }
