@@ -14,11 +14,15 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: PgPool, common_app_state: CommonAppState) -> Self {
+    pub fn new(
+        pool: PgPool,
+        common_app_state: CommonAppState,
+        redis_conn: Option<redis::aio::ConnectionManager>,
+    ) -> Self {
         let email_service = Arc::new(MockEmailService::new());
         Self {
             common_app_state,
-            service: Arc::new(UserService::new(pool, email_service)),
+            service: Arc::new(UserService::new(pool, email_service, redis_conn)),
         }
     }
 

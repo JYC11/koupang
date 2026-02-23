@@ -12,6 +12,7 @@ use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::{Duration, Utc};
+use redis::AsyncCommands;
 use shared::auth::jwt::{CurrentUser, JwtService, JwtTokens};
 use shared::auth::middleware::GetCurrentUser;
 use shared::config::auth_config::AuthConfig;
@@ -22,18 +23,27 @@ use shared::errors::AppError;
 use std::sync::Arc;
 use uuid::Uuid;
 
+const USER_CACHE_TTL_SECS: u64 = 300; // 5 minutes
+const USER_CACHE_PREFIX: &str = "user:";
+
 pub struct UserService {
     pool: PgPool,
     pub jwt_service: JwtService,
     email_service: Arc<dyn EmailService>,
+    redis_conn: Option<redis::aio::ConnectionManager>,
 }
 
 impl UserService {
-    pub fn new(pool: PgPool, email_service: Arc<dyn EmailService>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        email_service: Arc<dyn EmailService>,
+        redis_conn: Option<redis::aio::ConnectionManager>,
+    ) -> Self {
         Self {
             pool: pool.clone(),
             jwt_service: JwtService::new(AuthConfig::new()),
             email_service,
+            redis_conn,
         }
     }
 
@@ -41,11 +51,13 @@ impl UserService {
         pool: PgPool,
         auth_config: AuthConfig,
         email_service: Arc<dyn EmailService>,
+        redis_conn: Option<redis::aio::ConnectionManager>,
     ) -> Self {
         Self {
             pool: pool.clone(),
             jwt_service: JwtService::new(auth_config),
             email_service,
+            redis_conn,
         }
     }
 
@@ -131,6 +143,8 @@ impl UserService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)))?;
 
+        self.evict_user_cache(id).await;
+
         Ok(())
     }
 
@@ -145,6 +159,8 @@ impl UserService {
         })
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete user: {}", e)))?;
+
+        self.evict_user_cache(id).await;
 
         Ok(())
     }
@@ -299,20 +315,57 @@ impl UserService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to change password: {}", e)))?;
 
+        self.evict_user_cache(user_id).await;
+
         Ok(())
+    }
+
+    async fn get_cached_user(&self, id: Uuid) -> Option<CurrentUser> {
+        let mut conn = self.redis_conn.as_ref()?.clone();
+        let key = format!("{}{}", USER_CACHE_PREFIX, id);
+        let value: Option<String> = conn.get(&key).await.ok()?;
+        value.and_then(|v| serde_json::from_str(&v).ok())
+    }
+
+    async fn cache_user(&self, user: &CurrentUser) {
+        if let Some(conn) = &self.redis_conn {
+            let key = format!("{}{}", USER_CACHE_PREFIX, user.id);
+            if let Ok(value) = serde_json::to_string(user) {
+                let mut conn = conn.clone();
+                let _: Result<(), redis::RedisError> =
+                    conn.set_ex(&key, &value, USER_CACHE_TTL_SECS).await;
+            }
+        }
+    }
+
+    async fn evict_user_cache(&self, id: Uuid) {
+        if let Some(conn) = &self.redis_conn {
+            let key = format!("{}{}", USER_CACHE_PREFIX, id);
+            let mut conn = conn.clone();
+            let _: Result<(), redis::RedisError> = conn.del(&key).await;
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl GetCurrentUser for UserService {
-    // todo make this cacheable in redis
     async fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError> {
+        // Check cache first
+        if let Some(cached) = self.get_cached_user(id).await {
+            return Ok(cached);
+        }
+
         let user = get_user_by_id(&self.pool, id).await?;
 
-        Ok(CurrentUser {
+        let current_user = CurrentUser {
             id: user.id,
             role: user.role,
-        })
+        };
+
+        // Cache the result
+        self.cache_user(&current_user).await;
+
+        Ok(current_user)
     }
 }
 

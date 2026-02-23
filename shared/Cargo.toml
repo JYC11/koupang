@@ -17,3 +17,12 @@ tokio = "1.49.0"
 async-trait = "0.1"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tonic = "0.14.5"
+prost = "0.14.3"
+prost-types = "0.14.3"
+redis = { version = "1.0.4", features = ["tokio-comp", "connection-manager"] }
+tonic-prost = "0.14.5"
+
+
+[build-dependencies]
+tonic-prost-build = "0.14.5"

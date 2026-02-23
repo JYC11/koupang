@@ -1,0 +1,18 @@
+syntax = "proto3";
+package identity;
+
+service IdentityService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  string role = 4;
+  bool email_verified = 5;
+}

@@ -17,7 +17,7 @@ pub fn test_auth_config() -> AuthConfig {
 
 pub fn test_user_service(pool: PgPool) -> UserService {
     let email_service = Arc::new(MockEmailService::new());
-    UserService::new_with_config(pool, test_auth_config(), email_service)
+    UserService::new_with_config(pool, test_auth_config(), email_service, None)
 }
 
 pub async fn verify_user_email_directly(pool: &PgPool, username: &str) {

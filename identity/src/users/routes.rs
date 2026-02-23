@@ -41,7 +41,7 @@ pub fn user_routes(app_state: AppState) -> Router {
             auth_middleware.clone().handle(req, next)
         }));
 
-    // TODO replace with GRPC!!!
+    // DEPRECATED: Use gRPC IdentityService.GetUser instead (port 50051)
     let internal_routes = Router::new().route("/{id}", get(get_one_for_auth));
 
     Router::new()
@@ -164,8 +164,7 @@ async fn reset_password(
     ))
 }
 
-// TODO replace with GRPC!!!
-// TODO add caching!!!
+// DEPRECATED: Use gRPC IdentityService.GetUser instead
 async fn get_one_for_auth(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,

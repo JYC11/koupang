@@ -52,7 +52,7 @@ impl From<SystemTimeError> for AuthError {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CurrentUser {
     pub id: Uuid,
     pub role: String,
