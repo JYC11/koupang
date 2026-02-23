@@ -32,7 +32,7 @@ pub async fn get_user_by_username<'e>(
 
 pub async fn create_user(tx: &mut PgConnection, req: UserCreateReq) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO users (username, password, email, phone, role) 
+        "INSERT INTO users (username, password, email, phone, role)
              VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&req.username)
@@ -55,7 +55,7 @@ pub async fn update_user(
     let now = Utc::now();
 
     let result = sqlx::query(
-        "UPDATE users 
+        "UPDATE users
              SET username = $1, email = $2, phone = $3, role = $4, updated_at = $5
              WHERE id = $6 AND deleted_at IS NULL",
     )
@@ -92,8 +92,4 @@ pub async fn delete_user(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError
     }
 
     Ok(())
-}
-
-mod tests {
-    // TODO
 }

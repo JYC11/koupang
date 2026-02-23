@@ -129,7 +129,3 @@ async fn get_one_for_auth(
     let user = app_state.service.get_user(id).await?;
     Ok(Json(user))
 }
-
-mod tests {
-    // TODO
-}
