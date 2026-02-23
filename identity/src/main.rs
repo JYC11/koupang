@@ -1,28 +1,9 @@
-use crate::users::routes::user_routes;
-use crate::users::service::UserService;
-use shared::CommonAppState;
+use identity::AppState;
+use identity::app;
 use shared::config::db_config::DbConfig;
-use shared::db::{PgPool, init_db};
+use shared::db::init_db;
 use std::error::Error;
-use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-mod users;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub common_app_state: CommonAppState,
-    pub service: Arc<UserService>,
-}
-
-impl AppState {
-    fn new(pool: PgPool) -> Self {
-        Self {
-            common_app_state: CommonAppState::new(),
-            service: Arc::new(UserService::new(pool)),
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -37,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = init_db(db_config, "./.migrations/identity").await;
     let app_state = AppState::new(pool);
     let port = app_state.common_app_state.port;
-    let app = user_routes(app_state);
+    let app = app(app_state);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("Identity service listening on port {}", port);
     axum::serve(listener, app).await?;

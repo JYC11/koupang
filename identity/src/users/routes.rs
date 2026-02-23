@@ -28,15 +28,15 @@ pub fn user_routes(app_state: AppState) -> Router {
         .route("/refresh", post(refresh_token));
 
     let protected_routes = Router::new()
-        .route("/:id", get(get_one))
-        .route("/:id", put(update))
-        .route("/:id", delete(delete_user))
+        .route("/{id}", get(get_one))
+        .route("/{id}", put(update))
+        .route("/{id}", delete(delete_user))
         .layer(axum::middleware::from_fn(move |req, next| {
             auth_middleware.clone().handle(req, next)
         }));
 
     // TODO replace with GRPC!!!
-    let internal_routes = Router::new().route("/:id", get(get_one_for_auth));
+    let internal_routes = Router::new().route("/{id}", get(get_one_for_auth));
 
     Router::new()
         .nest("/api/v1/users", public_routes.merge(protected_routes))

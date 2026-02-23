@@ -1,0 +1,481 @@
+use crate::common::{
+    admin_create_req, sample_create_req, sample_create_req_2, sample_update_req, test_app_state,
+};
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use identity::app;
+use identity::users::dtos::{UserCreateReq, UserLoginReq};
+use shared::auth::jwt::JwtTokens;
+use shared::db::PgPool;
+use tower::ServiceExt;
+
+async fn body_bytes(response: axum::http::Response<Body>) -> Vec<u8> {
+    response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec()
+}
+
+async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
+    let bytes = body_bytes(response).await;
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn register_request(req: &UserCreateReq) -> Request<Body> {
+    Request::builder()
+        .uri("/api/v1/users/register")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(req).unwrap()))
+        .unwrap()
+}
+
+fn login_request(username: &str, password: &str) -> Request<Body> {
+    let login_req = UserLoginReq {
+        username: username.to_string(),
+        password: password.to_string(),
+    };
+    Request::builder()
+        .uri("/api/v1/users/login")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&login_req).unwrap()))
+        .unwrap()
+}
+
+/// Register a user and login, returning (access_token, refresh_token, user_id)
+async fn register_and_login(pool: &PgPool, req: &UserCreateReq) -> (String, String, String) {
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+
+    // Register
+    let resp = router.clone().oneshot(register_request(req)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Login
+    let resp = router
+        .clone()
+        .oneshot(login_request(&req.username, &req.password))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let tokens: JwtTokens = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+
+    // Get user id from the token by fetching the user
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/login")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&UserLoginReq {
+                        username: req.username.clone(),
+                        password: req.password.clone(),
+                    })
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let _ = body_bytes(resp).await;
+
+    // Get user id via internal endpoint - find the user
+    let user = identity::users::repository::get_user_by_username(pool, &req.username)
+        .await
+        .unwrap();
+
+    (
+        tokens.access_token,
+        tokens.refresh_token,
+        user.id.to_string(),
+    )
+}
+
+// ── Register Tests ──────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn register_returns_201(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+    let req = sample_create_req();
+
+    let resp = router.oneshot(register_request(&req)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn register_duplicate_returns_error(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+    let req = sample_create_req();
+
+    let resp = router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = router.oneshot(register_request(&req)).await.unwrap();
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "Expected error status for duplicate registration, got {}",
+        resp.status()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn register_missing_fields_returns_422(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/register")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"test"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ── Login Tests ─────────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_returns_tokens(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register first
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    // Login
+    let resp = router
+        .oneshot(login_request(&req.username, &req.password))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let tokens: JwtTokens = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert!(!tokens.access_token.is_empty());
+    assert!(!tokens.refresh_token.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_wrong_credentials_fails(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+    let req = sample_create_req();
+
+    // Register first
+    router
+        .clone()
+        .oneshot(register_request(&req))
+        .await
+        .unwrap();
+
+    // Login with wrong password
+    let resp = router
+        .oneshot(login_request(&req.username, "wrongpassword"))
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error(),
+        "Expected client error for wrong credentials, got {}",
+        resp.status()
+    );
+}
+
+// ── Refresh Tests ───────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn refresh_returns_new_access_token(pool: PgPool) {
+    let (_, refresh_token, _) = register_and_login(&pool, &sample_create_req()).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let refresh_req = serde_json::json!({ "refresh_token": refresh_token });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/users/refresh")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&refresh_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert!(body["access_token"].as_str().is_some());
+    assert!(!body["access_token"].as_str().unwrap().is_empty());
+}
+
+// ── GET User Tests ──────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_user_without_auth_returns_401(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", uuid::Uuid::new_v4()))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_own_user_returns_200(pool: PgPool) {
+    let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", user_id))
+                .method("GET")
+                .header("authorization", format!("Bearer {}", access_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["id"].as_str().unwrap(), user_id);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_other_user_non_admin_returns_403(pool: PgPool) {
+    let (access_token, _, _) = register_and_login(&pool, &sample_create_req()).await;
+
+    // Register another user
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let req2 = sample_create_req_2();
+    router
+        .clone()
+        .oneshot(register_request(&req2))
+        .await
+        .unwrap();
+    let other_user = identity::users::repository::get_user_by_username(&pool, &req2.username)
+        .await
+        .unwrap();
+
+    let state2 = test_app_state(pool);
+    let router2 = app(state2);
+    let resp = router2
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", other_user.id))
+                .method("GET")
+                .header("authorization", format!("Bearer {}", access_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn admin_can_get_any_user(pool: PgPool) {
+    // Register a regular user
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let user_req = sample_create_req();
+    router
+        .clone()
+        .oneshot(register_request(&user_req))
+        .await
+        .unwrap();
+    let regular_user = identity::users::repository::get_user_by_username(&pool, &user_req.username)
+        .await
+        .unwrap();
+
+    // Register and login as admin
+    let (admin_token, _, _) = register_and_login(&pool, &admin_create_req()).await;
+
+    let state2 = test_app_state(pool);
+    let router2 = app(state2);
+    let resp = router2
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", regular_user.id))
+                .method("GET")
+                .header("authorization", format!("Bearer {}", admin_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// ── PUT User Tests ──────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_own_user_returns_200(pool: PgPool) {
+    let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let update_req = sample_update_req();
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", user_id))
+                .method("PUT")
+                .header("authorization", format!("Bearer {}", access_token))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&update_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_other_user_non_admin_returns_403(pool: PgPool) {
+    let (access_token, _, _) = register_and_login(&pool, &sample_create_req()).await;
+
+    // Register another user
+    let state = test_app_state(pool.clone());
+    let router = app(state);
+    let req2 = sample_create_req_2();
+    router
+        .clone()
+        .oneshot(register_request(&req2))
+        .await
+        .unwrap();
+    let other_user = identity::users::repository::get_user_by_username(&pool, &req2.username)
+        .await
+        .unwrap();
+
+    let state2 = test_app_state(pool);
+    let router2 = app(state2);
+    let update_req = sample_update_req();
+    let resp = router2
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", other_user.id))
+                .method("PUT")
+                .header("authorization", format!("Bearer {}", access_token))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&update_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+// ── DELETE User Tests ───────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn delete_own_user_returns_200(pool: PgPool) {
+    let (access_token, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", user_id))
+                .method("DELETE")
+                .header("authorization", format!("Bearer {}", access_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn delete_without_auth_returns_401(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/users/{}", uuid::Uuid::new_v4()))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── Internal Endpoint Tests ─────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn internal_get_user_no_auth_returns_200(pool: PgPool) {
+    let (_, _, user_id) = register_and_login(&pool, &sample_create_req()).await;
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/internal/users/{}", user_id))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["id"].as_str().unwrap(), user_id);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn internal_get_nonexistent_returns_404(pool: PgPool) {
+    let state = test_app_state(pool);
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/internal/users/{}", uuid::Uuid::new_v4()))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

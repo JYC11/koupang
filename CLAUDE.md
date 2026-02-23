@@ -65,3 +65,7 @@
 - API gateway/BFF
 - Background jobs: https://crates.io/crates/aj
 - CQRS
+
+## Task management
+
+- beads_rust: https://github.com/Dicklesworthstone/beads_rust

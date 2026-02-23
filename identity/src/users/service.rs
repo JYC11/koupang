@@ -12,7 +12,7 @@ use shared::auth::jwt::{CurrentUser, JwtService, JwtTokens};
 use shared::auth::middleware::GetCurrentUser;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
-use shared::db::transaction_support::with_transaction;
+use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -29,24 +29,28 @@ impl UserService {
         }
     }
 
+    pub fn new_with_config(pool: PgPool, auth_config: AuthConfig) -> Self {
+        Self {
+            pool: pool.clone(),
+            jwt_service: JwtService::new(auth_config),
+        }
+    }
+
     pub async fn create_user(&self, req: UserCreateReq) -> Result<(), AppError> {
         let hashed_password = hash_password(&req.password)?;
         let mut user_req = req;
         user_req.password = hashed_password;
 
-        let _ = with_transaction(&self.pool, |tx| {
+        with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                let _ = create_user(tx.as_executor(), user_req).await.map_err(|e| {
-                    AppError::InternalServerError(format!(
-                        "Failed to update user: {}",
-                        e.to_owned()
-                    ))
-                });
+                create_user(tx.as_executor(), user_req)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
                 Ok(())
             })
         })
         .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)));
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create user: {}", e)))?;
 
         Ok(())
     }
@@ -57,37 +61,31 @@ impl UserService {
     }
 
     pub async fn update_user(&self, id: Uuid, req: UserUpdateReq) -> Result<(), AppError> {
-        let _ = with_transaction(&self.pool, |tx| {
+        with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                let _ = update_user(tx.as_executor(), id, req).await.map_err(|e| {
-                    AppError::InternalServerError(format!(
-                        "Failed to update user: {}",
-                        e.to_owned()
-                    ))
-                });
+                update_user(tx.as_executor(), id, req)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
                 Ok(())
             })
         })
         .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)));
+        .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)))?;
 
         Ok(())
     }
 
     pub async fn delete_user(&self, id: Uuid) -> Result<(), AppError> {
-        let _ = with_transaction(&self.pool, |tx| {
+        with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                let _ = delete_user(tx.as_executor(), id).await.map_err(|e| {
-                    AppError::InternalServerError(format!(
-                        "Failed to delete user: {}",
-                        e.to_owned()
-                    ))
-                });
+                delete_user(tx.as_executor(), id)
+                    .await
+                    .map_err(|e| TxError::Other(e.to_string()))?;
                 Ok(())
             })
         })
         .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to delete user: {}", e)));
+        .map_err(|e| AppError::InternalServerError(format!("Failed to delete user: {}", e)))?;
 
         Ok(())
     }
@@ -169,14 +167,16 @@ fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 /// Verify a plaintext password against a hash
-fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
+fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
     let parsed_hash = PasswordHash::new(hash)
         .map_err(|e| AppError::InternalServerError(format!("Invalid password hash: {}", e)))?;
 
     let argon2 = Argon2::default();
     match argon2.verify_password(password.as_bytes(), &parsed_hash) {
-        Ok(_) => Ok(true),
-        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Ok(_) => Ok(()),
+        Err(argon2::password_hash::Error::Password) => {
+            Err(AppError::Unauthorized("Invalid credentials".to_string()))
+        }
         Err(e) => Err(AppError::InternalServerError(format!(
             "Failed to verify password: {}",
             e

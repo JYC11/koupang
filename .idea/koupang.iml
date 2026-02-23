@@ -13,6 +13,7 @@
       <sourceFolder url="file://$MODULE_DIR$/review/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shared/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shipping/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/identity/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
