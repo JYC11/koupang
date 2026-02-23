@@ -1,10 +1,10 @@
 .PHONY: local-infra
 local-infra: ## Setup local infrastructure with docker compose
-	 docker compose -f docker-compose.infra.yaml up -d
+	 docker compose -f docker-compose.infra.yml up -d
 
 .PHONY: local-infra-down
 local-infra-down: ## Setup local infrastructure with docker compose
-	 docker compose -f docker-compose.infra.yaml down
+	 docker compose -f docker-compose.infra.yml down
 
 .PHONY: test
 test: ## Run tests for a specific service or all services (usage: make test SERVICE=identity or make test SERVICE=all)

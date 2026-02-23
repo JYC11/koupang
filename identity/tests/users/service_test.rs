@@ -1,9 +1,11 @@
 use crate::common::{
-    sample_create_req, sample_update_req, test_user_service, verify_user_email_directly,
+    sample_create_req, sample_update_req, start_test_redis, test_user_service,
+    test_user_service_with_redis, verify_user_email_directly,
 };
 use identity::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq,
 };
+use redis::AsyncCommands;
 use shared::auth::middleware::GetCurrentUser;
 use shared::db::PgPool;
 use uuid::Uuid;
@@ -424,4 +426,184 @@ async fn change_password_same_as_current_fails(pool: PgPool) {
         )
         .await;
     assert!(result.is_err(), "Should reject same password");
+}
+
+// ── Redis Cache Behavior Tests ──────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_by_id_caches_user_in_redis(pool: PgPool) {
+    let (redis_conn, _container) = start_test_redis().await;
+    let mut assert_conn = redis_conn.clone();
+    let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
+    let service = identity::users::service::UserService::new_with_config(
+        pool.clone(),
+        crate::common::test_auth_config(),
+        email_service,
+        Some(redis_conn),
+    );
+
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    let entity = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    // Call get_by_id which should cache the user
+    let current_user = service.get_by_id(entity.id).await.unwrap();
+
+    // Verify the key exists in Redis
+    let key = format!("user:{}", entity.id);
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(cached.is_some(), "user:{{id}} key should exist in Redis");
+
+    // Verify deserialized data matches
+    let cached_user: shared::auth::jwt::CurrentUser =
+        serde_json::from_str(&cached.unwrap()).unwrap();
+    assert_eq!(cached_user.id, current_user.id);
+    assert_eq!(cached_user.role, current_user.role);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn get_by_id_cache_hit_returns_same_data(pool: PgPool) {
+    let (service, _container) = test_user_service_with_redis(pool.clone()).await;
+
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    let entity = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    // First call — populates cache
+    let first = service.get_by_id(entity.id).await.unwrap();
+    // Second call — should hit cache
+    let second = service.get_by_id(entity.id).await.unwrap();
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.role, second.role);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_user_evicts_cache(pool: PgPool) {
+    let (redis_conn, _container) = start_test_redis().await;
+    let mut assert_conn = redis_conn.clone();
+    let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
+    let service = identity::users::service::UserService::new_with_config(
+        pool.clone(),
+        crate::common::test_auth_config(),
+        email_service,
+        Some(redis_conn),
+    );
+
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    let entity = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    // Populate cache
+    service.get_by_id(entity.id).await.unwrap();
+    let key = format!("user:{}", entity.id);
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(cached.is_some(), "Cache should be populated before update");
+
+    // Update user — should evict cache
+    service
+        .update_user(entity.id, sample_update_req())
+        .await
+        .unwrap();
+
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(cached.is_none(), "Cache should be evicted after update");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn delete_user_evicts_cache(pool: PgPool) {
+    let (redis_conn, _container) = start_test_redis().await;
+    let mut assert_conn = redis_conn.clone();
+    let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
+    let service = identity::users::service::UserService::new_with_config(
+        pool.clone(),
+        crate::common::test_auth_config(),
+        email_service,
+        Some(redis_conn),
+    );
+
+    let req = sample_create_req();
+    let username = req.username.clone();
+    service.create_user(req).await.unwrap();
+
+    let entity = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    // Populate cache
+    service.get_by_id(entity.id).await.unwrap();
+    let key = format!("user:{}", entity.id);
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(cached.is_some(), "Cache should be populated before delete");
+
+    // Delete user — should evict cache
+    service.delete_user(entity.id).await.unwrap();
+
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(cached.is_none(), "Cache should be evicted after delete");
+
+    // get_by_id should also fail
+    let result = service.get_by_id(entity.id).await;
+    assert!(result.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn change_password_evicts_cache(pool: PgPool) {
+    let (redis_conn, _container) = start_test_redis().await;
+    let mut assert_conn = redis_conn.clone();
+    let email_service = std::sync::Arc::new(shared::email::MockEmailService::new());
+    let service = identity::users::service::UserService::new_with_config(
+        pool.clone(),
+        crate::common::test_auth_config(),
+        email_service,
+        Some(redis_conn),
+    );
+
+    let req = sample_create_req();
+    let username = req.username.clone();
+    let password = req.password.clone();
+    service.create_user(req).await.unwrap();
+
+    let entity = identity::users::repository::get_user_by_username(&pool, &username)
+        .await
+        .unwrap();
+
+    // Populate cache
+    service.get_by_id(entity.id).await.unwrap();
+    let key = format!("user:{}", entity.id);
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(
+        cached.is_some(),
+        "Cache should be populated before password change"
+    );
+
+    // Change password — should evict cache
+    service
+        .change_password(
+            entity.id,
+            ChangePasswordReq {
+                current_password: password,
+                new_password: "newpassword456".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let cached: Option<String> = assert_conn.get(&key).await.unwrap();
+    assert!(
+        cached.is_none(),
+        "Cache should be evicted after password change"
+    );
 }
