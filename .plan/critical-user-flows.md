@@ -191,20 +191,3 @@ To visualize how these fit together in your Rust project:
 | **Webhook Sig**    | Med      | `hmac`, `sha2`                  | Security             |
 | **OpenAPI**        | Med      | `utoipa`, `utoipa-swagger-ui`   | API Evolution        |
 | **Tracing**        | Med      | `tracing-opentelemetry`         | Observability        |
-
-# Recommendation on Where to Start
-
-Do not try to build all flows at once. Start with the **"Happy Path" Ordering Flow**.
-
-1.  **Step 1:** Build **Identity Service** (Login/Register) so you have User IDs.
-2.  **Step 2:** Build **Catalog Service** (Create Product) so you have something to buy.
-3.  **Step 3:** Build **Order Service** with the **Outbox Pattern**.
-    - Make sure you can write an Order to DB and see a row appear in the `outbox` table.
-    - Make sure a background task picks that row up and prints to logs.
-4.  **Step 4:** Connect **Kafka**.
-    - Make the background task send to Kafka.
-    - Make a dummy consumer print the message.
-5.  **Step 5:** Implement the **Saga**.
-    - Add Inventory and Payment logic as consumers that react to the Order event.
-
-This incremental approach ensures your core infrastructure (Outbox + EDA) works before you add business complexity.

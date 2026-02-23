@@ -1,4 +1,12 @@
-# Microservices
+# Project
+
+- an ecommerce microservice project for learning and portfolio purposes
+
+## Features
+
+- refer to .plan/critical-user-flows.md for user flows as needed
+
+## Microservices
 
 - Identity
   - Responsibility: Auth, Users, Profiles
@@ -27,9 +35,27 @@
 - Shared
   - Responsibility: contains shared libraries/code between services
 
+## Tech stack
+
+- rust (most used crates in no particular order)
+  - axum
+  - sqlx
+  - tokio
+- infra
+  - postgres
+  - redis
+- containerization
+  - docker
+  - docker compose
+- monitoring/observability
+  - opentelemetry
+  - prometheus
+- message queue
+- kafka
+
 ## Patterns to implement
 
-- Api Evolution
+- Api Versioning
 - Event Driven Architecture: https://crates.io/crates/ruva
 - Transactional Outbox: https://crates.io/crates/outbox-core
 - Listen to yourself
@@ -38,12 +64,4 @@
 - Idempotency
 - API gateway/BFF
 - Background jobs: https://crates.io/crates/aj
-
-## Tech stack
-
-- Postgres
-- Redis
-- Kafka
-- Opentelemetry
-- Prometheus
-- GRPC: https://github.com/hyperium/tonic
+- CQRS
