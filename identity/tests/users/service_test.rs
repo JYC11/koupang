@@ -190,7 +190,11 @@ async fn get_current_user_returns_correct_user(pool: PgPool) {
         .await
         .unwrap();
 
-    let current_user = service.get_by_id(entity.id).unwrap();
+    let entity_id = entity.id;
+    let current_user = tokio::task::spawn_blocking(move || service.get_by_id(entity_id))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(current_user.id, entity.id);
     assert_eq!(current_user.role, role);
 }

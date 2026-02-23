@@ -79,7 +79,7 @@ async fn get_one(
     current_user: CurrentUser,
 ) -> Result<Json<UserRes>, AppError> {
     // Check authorization: user can access their own data or admin can access any
-    if current_user.can_access(&id) {
+    if !current_user.can_access(&id) {
         return Err(AppError::Forbidden(
             "You don't have permission to access this resource".to_string(),
         ));
@@ -95,7 +95,7 @@ async fn update(
     current_user: CurrentUser,
     Json(req): Json<UserUpdateReq>,
 ) -> Result<(StatusCode, &'static str), AppError> {
-    if current_user.can_access(&id) {
+    if !current_user.can_access(&id) {
         return Err(AppError::Forbidden(
             "You don't have permission to update this resource".to_string(),
         ));
@@ -110,7 +110,7 @@ async fn delete_user(
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<(StatusCode, &'static str), AppError> {
-    if current_user.can_access(&id) {
+    if !current_user.can_access(&id) {
         return Err(AppError::Forbidden(
             "You don't have permission to delete this resource".to_string(),
         ));

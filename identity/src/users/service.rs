@@ -140,16 +140,14 @@ impl GetCurrentUser for UserService {
     // todo make this cacheable in redis
     fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError> {
         let pool = self.pool.clone();
+        let handle = tokio::runtime::Handle::current();
 
-        tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async move {
-                let user = get_user_by_id(&pool, id).await?;
+        handle.block_on(async move {
+            let user = get_user_by_id(&pool, id).await?;
 
-                Ok(CurrentUser {
-                    id: user.id,
-                    role: user.role,
-                })
+            Ok(CurrentUser {
+                id: user.id,
+                role: user.role,
             })
         })
     }
