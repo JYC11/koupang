@@ -166,6 +166,20 @@ Each flow highlights **Synchronous** (HTTP/gRPC) vs. **Asynchronous** (Events) b
 
 ---
 
+### 8. Auth Flows
+- User Roles so far:
+    - BUYER: end users
+    - SELLER: users who can upload and sell products
+    - ADMIN: users who can manage the entire platform
+  - Could be up to change, so it's not enums right now
+- User Registration
+  - sends verification email after registration
+  - needs to verify email before login
+- User Password Reset
+  - sends reset link to email
+- User Password Change
+  - requires current and new password
+
 # Architecture Diagram Logic (Mental Model)
 
 To visualize how these fit together in your Rust project:
