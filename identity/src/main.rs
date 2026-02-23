@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     run_service_with_infra(
         ServiceConfig {
             name: "identity",
+            port_env_key: "IDENTITY_PORT",
             db_url_env_key: "IDENTITY_DB_URL",
             migrations_dir: "./.migrations/identity",
         },
@@ -27,8 +28,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await
             },
         )),
-        |pool, common_app_state, redis_conn| {
-            let app_state = AppState::new(pool, common_app_state, redis_conn);
+        |pool, redis_conn| {
+            let app_state = AppState::new(pool, redis_conn);
             app(app_state).merge(health_routes("identity"))
         },
     )

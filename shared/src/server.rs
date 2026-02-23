@@ -1,4 +1,3 @@
-use crate::CommonAppState;
 use crate::cache::init_optional_redis;
 use crate::config::db_config::DbConfig;
 use crate::db::{PgPool, init_db};
@@ -10,6 +9,7 @@ use std::net::SocketAddr;
 
 pub struct ServiceConfig {
     pub name: &'static str,
+    pub port_env_key: &'static str,
     pub db_url_env_key: &'static str,
     pub migrations_dir: &'static str,
 }
@@ -25,19 +25,21 @@ pub async fn run_service_with_infra<F, G, Fut>(
     build_app: F,
 ) -> Result<(), Box<dyn Error>>
 where
-    F: FnOnce(PgPool, CommonAppState, Option<redis::aio::ConnectionManager>) -> Router,
+    F: FnOnce(PgPool, Option<redis::aio::ConnectionManager>) -> Router,
     G: FnOnce(PgPool, SocketAddr) -> Fut,
     Fut: Future<Output = Result<(), tonic::transport::Error>> + Send,
 {
     init_tracing(config.name);
 
     let db_config = DbConfig::new(config.db_url_env_key);
+    let port: u16 = std::env::var(config.port_env_key)
+        .unwrap_or_else(|_| "3000".to_string())
+        .parse()
+        .expect("PORT must be a valid u16");
     let pool = init_db(db_config, config.migrations_dir).await;
     let redis_conn = init_optional_redis().await;
 
-    let common_app_state = CommonAppState::new();
-    let port = common_app_state.port;
-    let app = build_app(pool.clone(), common_app_state, redis_conn);
+    let app = build_app(pool.clone(), redis_conn);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("{} HTTP service listening on port {}", config.name, port);
