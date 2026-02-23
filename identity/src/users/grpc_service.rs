@@ -35,7 +35,7 @@ impl IdentityService for IdentityGrpcService {
             id: user.id.to_string(),
             username: user.username,
             email: user.email,
-            role: user.role,
+            role: user.role.to_string(),
             email_verified: user.email_verified,
         }))
     }

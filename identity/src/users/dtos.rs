@@ -1,5 +1,6 @@
 use crate::users::entities::UserEntity;
 use serde::{Deserialize, Serialize};
+use shared::auth::Role;
 use shared::auth::jwt::JwtTokens;
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
@@ -10,7 +11,7 @@ pub struct UserCreateReq {
     pub password: String,
     pub email: String,
     pub phone: String,
-    pub role: String,
+    pub role: Role,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +19,7 @@ pub struct UserUpdateReq {
     pub username: String,
     pub email: String,
     pub phone: String,
-    pub role: String,
+    pub role: Role,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +31,7 @@ pub struct UserRes {
     pub username: String,
     pub email: String,
     pub phone: String,
-    pub role: String,
+    pub role: Role,
     pub email_verified: bool,
 }
 

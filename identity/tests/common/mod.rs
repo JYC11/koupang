@@ -1,6 +1,7 @@
 use identity::AppState;
 use identity::users::dtos::{UserCreateReq, UserUpdateReq};
 use identity::users::service::UserService;
+use shared::auth::Role;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::email::MockEmailService;
@@ -44,7 +45,7 @@ pub fn sample_create_req() -> UserCreateReq {
         password: "password123".to_string(),
         email: "test@example.com".to_string(),
         phone: "010-1234-5678".to_string(),
-        role: "USER".to_string(),
+        role: Role::Buyer,
     }
 }
 
@@ -54,7 +55,7 @@ pub fn sample_create_req_2() -> UserCreateReq {
         password: "password456".to_string(),
         email: "test2@example.com".to_string(),
         phone: "010-9876-5432".to_string(),
-        role: "USER".to_string(),
+        role: Role::Buyer,
     }
 }
 
@@ -64,7 +65,7 @@ pub fn admin_create_req() -> UserCreateReq {
         password: "adminpass123".to_string(),
         email: "admin@example.com".to_string(),
         phone: "010-0000-0000".to_string(),
-        role: "ADMIN".to_string(),
+        role: Role::Admin,
     }
 }
 
@@ -73,7 +74,7 @@ pub fn sample_update_req() -> UserUpdateReq {
         username: "updateduser".to_string(),
         email: "updated@example.com".to_string(),
         phone: "010-1111-2222".to_string(),
-        role: "USER".to_string(),
+        role: Role::Buyer,
     }
 }
 

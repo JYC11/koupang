@@ -23,7 +23,7 @@ async fn get_user_returns_correct_response() {
     let req = sample_create_req();
     let username = req.username.clone();
     let email = req.email.clone();
-    let role = req.role.clone();
+    let role = req.role;
 
     let mut conn = pool.acquire().await.unwrap();
     let user_id = create_user(&mut *conn, req).await.unwrap();
@@ -42,7 +42,7 @@ async fn get_user_returns_correct_response() {
     assert_eq!(response.id, user_id.to_string());
     assert_eq!(response.username, username);
     assert_eq!(response.email, email);
-    assert_eq!(response.role, role);
+    assert_eq!(response.role, role.to_string());
     assert!(!response.email_verified);
 }
 

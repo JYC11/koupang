@@ -1,3 +1,4 @@
+use crate::auth::Role;
 use crate::auth::jwt::CurrentUser;
 use crate::errors::AppError;
 use uuid::Uuid;
@@ -16,7 +17,7 @@ pub fn require_access(
 }
 
 pub fn require_admin(current_user: &CurrentUser) -> Result<(), AppError> {
-    if current_user.role == "ADMIN" {
+    if current_user.role == Role::Admin {
         Ok(())
     } else {
         Err(AppError::Forbidden("Admin access required".to_string()))

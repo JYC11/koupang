@@ -1,3 +1,4 @@
+use shared::auth::Role;
 use sqlx::FromRow;
 use sqlx::types::Uuid;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -12,7 +13,7 @@ pub struct UserEntity {
     pub password: String,
     pub email: String,
     pub phone: String,
-    pub role: String,
+    pub role: Role,
     pub email_verified: bool,
 }
 

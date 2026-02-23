@@ -171,18 +171,17 @@ Each flow highlights **Synchronous** (HTTP/gRPC) vs. **Asynchronous** (Events) b
     - BUYER: end users
     - SELLER: users who can upload and sell products
     - ADMIN: users who can manage the entire platform
-  - Could be up to change, so it's not enums right now
-- User Registration
+- User Registration - DONE
   - sends verification email after registration
     - a simple HTML email with a link
   - needs to verify email before login
-- User Password Reset
+- User Password Reset - DONE
   - sends reset link to email
     - same as above, a simple HTML email with a link
-- User Password Change
+- User Password Change - DONE
   - requires current and new password
   - the new password cannot be the same as the old one
-- Email interface
+- Email interface - DONE
   - no actual implementation yet, just a simple mocked implementation for now
   - just need a trait interface
 

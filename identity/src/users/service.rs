@@ -182,7 +182,7 @@ impl UserService {
         // Generate tokens
         let access_token = self
             .jwt_service
-            .generate_access_token(&user.id, &user.username, &user.role)
+            .generate_access_token(&user.id, &user.username, user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
         let refresh_token = self
@@ -211,7 +211,7 @@ impl UserService {
         // Generate new access token
         let access_token = self
             .jwt_service
-            .generate_access_token(&user.id, &user.username, &user.role)
+            .generate_access_token(&user.id, &user.username, user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
         Ok(UserRefreshRes { access_token })

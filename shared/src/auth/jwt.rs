@@ -1,3 +1,4 @@
+use crate::auth::Role;
 use crate::config::auth_config::AuthConfig;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use uuid::Uuid;
 pub struct AccessTokenClaims {
     pub sub: Uuid,    // Subject (User ID)
     pub name: String, // Custom Claim
-    pub role: String, // Custom Claim
+    pub role: Role,   // Custom Claim
     pub iat: i64,     // Issued At
     pub exp: i64,     // Expiration Time
 }
@@ -55,12 +56,12 @@ impl From<SystemTimeError> for AuthError {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CurrentUser {
     pub id: Uuid,
-    pub role: String,
+    pub role: Role,
 }
 
 impl CurrentUser {
     pub fn can_access(&self, target_user_id: &Uuid) -> bool {
-        self.id == *target_user_id || self.role == "ADMIN"
+        self.id == *target_user_id || self.role == Role::Admin
     }
 }
 
@@ -88,14 +89,14 @@ impl JwtService {
         &self,
         user_id: &Uuid,
         name: &str,
-        role: &str,
+        role: Role,
     ) -> Result<String, AuthError> {
         let now = Self::current_timestamp()?;
 
         let claims = AccessTokenClaims {
             sub: user_id.to_owned(),
             name: name.to_owned(),
-            role: role.to_owned(),
+            role,
             iat: now,
             exp: now + self.config.access_token_expiry_secs as i64,
         };
@@ -166,7 +167,7 @@ impl JwtService {
         &self,
         refresh_token: &str,
         name: &str,
-        role: &str,
+        role: Role,
     ) -> Result<String, AuthError> {
         let claims = self.validate_refresh_token(refresh_token)?;
 
@@ -204,7 +205,7 @@ mod tests {
         let service = get_test_service();
         let user_id = Uuid::new_v4();
         let name = "Test User";
-        let role = "admin";
+        let role = Role::Admin;
 
         let token = service
             .generate_access_token(&user_id, name, role)
@@ -242,7 +243,7 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         let token = service
-            .generate_access_token(&user_id, "Name", "Role")
+            .generate_access_token(&user_id, "Name", Role::Buyer)
             .unwrap();
 
         let mut config = AuthConfig::for_tests();
@@ -277,7 +278,7 @@ mod tests {
         let service = JwtService::new(config);
         let user_id = Uuid::new_v4();
         let token = service
-            .generate_access_token(&user_id, "Name", "Role")
+            .generate_access_token(&user_id, "Name", Role::Buyer)
             .unwrap();
 
         // Token should be valid immediately
@@ -320,7 +321,7 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         let token = service
-            .generate_access_token(&user_id, "Name", "Role")
+            .generate_access_token(&user_id, "Name", Role::Buyer)
             .unwrap();
 
         // Validate with strict settings (no leeway)
@@ -346,7 +347,7 @@ mod tests {
         let service = get_test_service();
         let user_id = Uuid::new_v4();
         let new_name = "Updated Name";
-        let new_role = "super_admin";
+        let new_role = Role::Seller;
 
         let refresh_token = service
             .generate_refresh_token(&user_id)
@@ -373,13 +374,13 @@ mod tests {
         let service = get_test_service();
         let user_id = Uuid::new_v4();
 
-        let result = service.refresh_access("invalid.token.here", "Name", "Role");
+        let result = service.refresh_access("invalid.token.here", "Name", Role::Buyer);
         assert!(result.is_err());
 
         let access_token = service
-            .generate_access_token(&user_id, "Name", "Role")
+            .generate_access_token(&user_id, "Name", Role::Buyer)
             .unwrap();
-        let result = service.refresh_access(&access_token, "Name", "Role");
+        let result = service.refresh_access(&access_token, "Name", Role::Buyer);
         assert!(result.is_err());
     }
 }
