@@ -1,7 +1,7 @@
-use catalog::app;
 use catalog::AppState;
+use catalog::app;
 use shared::health::health_routes;
-use shared::server::{run_service_with_infra, NoGrpc, ServiceConfig};
+use shared::server::{NoGrpc, ServiceConfig, run_service_with_infra};
 use std::error::Error;
 
 #[tokio::main]
@@ -19,5 +19,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
             app(app_state).merge(health_routes("catalog"))
         },
     )
-        .await
+    .await
 }

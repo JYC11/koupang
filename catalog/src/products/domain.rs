@@ -22,17 +22,13 @@ impl TryFrom<ProductEntity> for Product {
     type Error = AppError;
 
     fn try_from(value: ProductEntity) -> Result<Self, Self::Error> {
-        let name = ProductName::new(&*value.name)?;
-        let slug = Slug::new(&*value.slug)?;
-        let price = Price::new(value.base_price)?;
-        let currency = Currency::new(&*value.currency)?;
         Ok(Self {
             id: value.id,
-            name,
-            slug,
+            name: ProductName::new(&*value.name)?,
+            slug: Slug::new(&*value.slug)?,
             description: value.description,
-            base_price: price,
-            currency,
+            base_price: Price::new(value.base_price)?,
+            currency: Currency::new(&*value.currency)?,
             category_id: value.category_id,
             brand_id: value.brand_id,
             status: value.status,
@@ -55,15 +51,12 @@ impl TryFrom<(Uuid, SkuEntity)> for Sku {
 
     fn try_from(value: (Uuid, SkuEntity)) -> Result<Self, Self::Error> {
         let (product_id, entity) = value;
-        let sku_code = SkuCode::new(&*entity.sku_code)?;
-        let price = Price::new(entity.price)?;
-        let stock_quantity = StockQuantity::new(entity.stock_quantity)?;
         Ok(Self {
             id: entity.id,
             product_id,
-            sku_code,
-            price,
-            stock_quantity,
+            sku_code: SkuCode::new(&*entity.sku_code)?,
+            price: Price::new(entity.price)?,
+            stock_quantity: StockQuantity::new(entity.stock_quantity)?,
             attributes: entity.attributes,
         })
     }

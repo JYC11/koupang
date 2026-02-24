@@ -1,6 +1,6 @@
-use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::types::Uuid;
 use sqlx::FromRow;
+use sqlx::types::Uuid;
+use sqlx::types::chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct BrandEntity {

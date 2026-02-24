@@ -247,9 +247,7 @@ async fn has_products_false_when_none() {
         .await
         .unwrap();
 
-    let result = repository::has_products(&db.pool, brand_id)
-        .await
-        .unwrap();
+    let result = repository::has_products(&db.pool, brand_id).await.unwrap();
     assert!(!result);
 }
 

@@ -6,8 +6,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::categories::dtos::{CategoryRes, CreateCategoryReq};
-use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::auth::Role;
+use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::test_utils::http::{body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -83,8 +83,7 @@ async fn create_category_via_router(pool: &shared::db::PgPool) -> (CategoryRes, 
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = body_json(resp).await;
-    let category: CategoryRes =
-        serde_json::from_value(body["data"].clone()).unwrap();
+    let category: CategoryRes = serde_json::from_value(body["data"].clone()).unwrap();
     (category, token)
 }
 
@@ -111,8 +110,7 @@ async fn list_root_categories_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let categories: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(categories.len(), 2);
 }
 
@@ -136,8 +134,7 @@ async fn get_category_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let category: CategoryRes =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let category: CategoryRes = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(category.name, "Electronics");
 }
 
@@ -161,8 +158,7 @@ async fn get_category_by_slug_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let category: CategoryRes =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let category: CategoryRes = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(category.name, "Home Garden");
 }
 
@@ -207,8 +203,7 @@ async fn get_children_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let children: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let children: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(children.len(), 2);
 }
 
@@ -234,8 +229,7 @@ async fn get_subtree_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let subtree: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let subtree: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(subtree.len(), 3);
 }
 
@@ -261,8 +255,7 @@ async fn get_ancestors_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let ancestors: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let ancestors: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(ancestors.len(), 3);
     assert_eq!(ancestors[0].name, "Electronics");
     assert_eq!(ancestors[2].name, "Android");

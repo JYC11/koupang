@@ -100,15 +100,15 @@ pub async fn create_category(
          VALUES ($1, $2, $3::ltree, $4, $5, $6)
          RETURNING id",
     )
-        .bind(req.name.as_str())
-        .bind(req.slug.as_str())
-        .bind(path)
-        .bind(&req.parent_id)
-        .bind(depth)
-        .bind(&req.description)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
+    .bind(req.name.as_str())
+    .bind(req.slug.as_str())
+    .bind(path)
+    .bind(&req.parent_id)
+    .bind(depth)
+    .bind(&req.description)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
 
     Ok(row.0)
 }
@@ -193,10 +193,10 @@ pub async fn has_products<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<boo
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM products WHERE category_id = $1 AND deleted_at IS NULL",
     )
-        .bind(id)
-        .fetch_one(executor)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
+    .bind(id)
+    .fetch_one(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
 
     Ok(row.0 > 0)
 }

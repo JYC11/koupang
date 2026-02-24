@@ -166,9 +166,7 @@ async fn get_subtree() {
     let (child_id, child_path) = create_child(&db, "Phones", root_id, &root_path, 1).await;
     create_child(&db, "Smartphones", child_id, &child_path, 2).await;
 
-    let subtree = repository::get_subtree(&db.pool, &root_path)
-        .await
-        .unwrap();
+    let subtree = repository::get_subtree(&db.pool, &root_path).await.unwrap();
 
     assert_eq!(subtree.len(), 3);
     // Ordered by path
@@ -182,8 +180,7 @@ async fn get_ancestors() {
     let db = test_db().await;
     let (root_id, root_path) = create_root(&db, "Electronics").await;
     let (child_id, child_path) = create_child(&db, "Phones", root_id, &root_path, 1).await;
-    let (_, grandchild_path) =
-        create_child(&db, "Smartphones", child_id, &child_path, 2).await;
+    let (_, grandchild_path) = create_child(&db, "Smartphones", child_id, &child_path, 2).await;
 
     let ancestors = repository::get_ancestors(&db.pool, &grandchild_path)
         .await

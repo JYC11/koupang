@@ -142,3 +142,8 @@ Located at `migrations/`, referenced as `./.migrations/catalog` at runtime.
 ```
 make test SERVICE=catalog
 ```
+
+### Catalog-specific tips
+- Common VOs: `catalog/src/common/value_objects.rs` — `validated_name!` macro, `Slug`, `HttpUrl`
+- ltree path column requires `::ltree` cast in raw SQL inserts
+- Test fixtures: `create_test_category()`, `create_test_brand()`, `associate_brand_category()` in `tests/common/mod.rs`

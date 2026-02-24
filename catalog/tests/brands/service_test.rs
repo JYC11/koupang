@@ -236,7 +236,10 @@ async fn delete_brand_with_products_fails() {
     let catalog = test_catalog_service(db.pool.clone());
     let seller = seller_user();
     catalog
-        .create_product(&seller, sample_create_product_with_fks(None, Some(brand_id)))
+        .create_product(
+            &seller,
+            sample_create_product_with_fks(None, Some(brand_id)),
+        )
         .await
         .unwrap();
 

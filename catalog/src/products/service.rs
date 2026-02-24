@@ -7,8 +7,8 @@ use crate::products::dtos::{
 use crate::products::repository;
 use shared::auth::guards::require_access;
 use shared::auth::jwt::CurrentUser;
-use shared::db::transaction_support::{with_transaction, TxError};
 use shared::db::PgPool;
+use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -39,8 +39,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to create product: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create product: {}", e)))?;
 
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
         Ok(ProductRes::new(product))
@@ -100,8 +100,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to update product: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to update product: {}", e)))?;
 
         Ok(())
     }
@@ -121,8 +121,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to delete product: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to delete product: {}", e)))?;
 
         Ok(())
     }
@@ -147,8 +147,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
 
         let sku = repository::get_sku_by_id(&self.pool, sku_id).await?;
         Ok(SkuRes::new(sku))
@@ -178,8 +178,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to update SKU: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to update SKU: {}", e)))?;
 
         Ok(())
     }
@@ -200,8 +200,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to delete SKU: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to delete SKU: {}", e)))?;
 
         Ok(())
     }
@@ -223,8 +223,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
 
         Ok(())
     }
@@ -254,8 +254,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
 
         // Fetch the newly created image for response
         let images = repository::list_images_by_product(&self.pool, product_id).await?;
@@ -285,8 +285,8 @@ impl CatalogService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to delete image: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to delete image: {}", e)))?;
 
         Ok(())
     }

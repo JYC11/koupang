@@ -6,8 +6,8 @@ use crate::categories::dtos::CategoryRes;
 use crate::categories::repository as category_repo;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
-use shared::db::transaction_support::{with_transaction, TxError};
 use shared::db::PgPool;
+use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -36,8 +36,8 @@ impl BrandService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to create brand: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create brand: {}", e)))?;
 
         let brand = repository::get_brand_by_id(&self.pool, brand_id).await?;
         Ok(BrandRes::new(brand))
@@ -76,8 +76,8 @@ impl BrandService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to update brand: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to update brand: {}", e)))?;
 
         Ok(())
     }
@@ -100,8 +100,8 @@ impl BrandService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| AppError::InternalServerError(format!("Failed to delete brand: {}", e)))?;
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to delete brand: {}", e)))?;
 
         Ok(())
     }
@@ -127,10 +127,10 @@ impl BrandService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| {
-                AppError::InternalServerError(format!("Failed to associate category: {}", e))
-            })?;
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to associate category: {}", e))
+        })?;
 
         Ok(())
     }
@@ -150,10 +150,10 @@ impl BrandService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-            .await
-            .map_err(|e| {
-                AppError::InternalServerError(format!("Failed to disassociate category: {}", e))
-            })?;
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to disassociate category: {}", e))
+        })?;
 
         Ok(())
     }

@@ -46,13 +46,13 @@ pub async fn create_brand(
          VALUES ($1, $2, $3, $4)
          RETURNING id",
     )
-        .bind(req.name.as_str())
-        .bind(req.slug.as_str())
-        .bind(&req.description)
-        .bind(req.logo_url.as_ref().map(|u| u.as_str()))
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to create brand: {}", e)))?;
+    .bind(req.name.as_str())
+    .bind(req.slug.as_str())
+    .bind(&req.description)
+    .bind(req.logo_url.as_ref().map(|u| u.as_str()))
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to create brand: {}", e)))?;
 
     Ok(row.0)
 }
@@ -150,11 +150,11 @@ pub async fn associate_category(
         "INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)
          ON CONFLICT DO NOTHING",
     )
-        .bind(brand_id)
-        .bind(category_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to associate category: {}", e)))?;
+    .bind(brand_id)
+    .bind(category_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to associate category: {}", e)))?;
 
     Ok(())
 }
@@ -196,10 +196,10 @@ pub async fn list_categories_for_brand<'e>(
          WHERE bc.brand_id = $1
          ORDER BY c.name ASC",
     )
-        .bind(brand_id)
-        .fetch_all(executor)
-        .await
-        .map_err(|e| {
-            AppError::InternalServerError(format!("Failed to list categories for brand: {}", e))
-        })
+    .bind(brand_id)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        AppError::InternalServerError(format!("Failed to list categories for brand: {}", e))
+    })
 }

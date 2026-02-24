@@ -1,11 +1,11 @@
+use catalog::AppState;
 use catalog::brands::service::BrandService;
 use catalog::categories::service::CategoryService;
 use catalog::products::dtos::{AddProductImageReq, CreateProductReq, CreateSkuReq};
 use catalog::products::service::CatalogService;
-use catalog::AppState;
 use rust_decimal::Decimal;
-use shared::auth::jwt::CurrentUser;
 use shared::auth::Role;
+use shared::auth::jwt::CurrentUser;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::test_utils::db::TestDb;

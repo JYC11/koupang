@@ -18,14 +18,11 @@ impl TryFrom<CategoryEntity> for Category {
     type Error = AppError;
 
     fn try_from(value: CategoryEntity) -> Result<Self, Self::Error> {
-        let name = CategoryName::new(&value.name)?;
-        let slug = Slug::new(&value.slug)?;
-        let label = LtreeLabel::from_name(name.as_str())?;
         Ok(Self {
             id: value.id,
-            name,
-            slug,
-            path: label,
+            name: CategoryName::new(&value.name)?,
+            slug: Slug::new(&value.slug)?,
+            path: LtreeLabel::from_name(value.path.as_str())?,
             parent_id: value.parent_id,
             depth: value.depth,
             description: value.description,

@@ -1,4 +1,4 @@
 mod brands;
-mod common;
 mod categories;
+mod common;
 mod products;

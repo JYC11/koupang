@@ -1,17 +1,17 @@
 use axum::{
-    extract::{Path, State}, response::IntoResponse,
+    Json, Router,
+    extract::{Path, State},
+    response::IntoResponse,
     routing::{delete, get, post, put},
-    Json,
-    Router,
 };
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::products::dtos::{
     AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
     ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
 };
-use crate::AppState;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;

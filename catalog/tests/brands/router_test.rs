@@ -6,8 +6,8 @@ use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::brands::dtos::{BrandRes, CreateBrandReq};
 use catalog::categories::dtos::CategoryRes;
-use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::auth::Role;
+use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::test_utils::http::{body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -81,12 +81,7 @@ async fn create_brand_via_router(pool: &shared::db::PgPool) -> (BrandRes, String
     };
 
     let resp = router
-        .oneshot(authed_json_request(
-            "POST",
-            "/api/v1/brands",
-            &token,
-            &req,
-        ))
+        .oneshot(authed_json_request("POST", "/api/v1/brands", &token, &req))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -219,8 +214,7 @@ async fn list_categories_for_brand_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let categories: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(categories.len(), 1);
     assert_eq!(categories[0].name, "Electronics");
 }
@@ -349,8 +343,7 @@ async fn associate_category_via_router() {
         )
         .await
         .unwrap();
-    let categories: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(categories.len(), 1);
 }
 
@@ -392,7 +385,6 @@ async fn disassociate_category_via_router() {
         )
         .await
         .unwrap();
-    let categories: Vec<CategoryRes> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert!(categories.is_empty());
 }
