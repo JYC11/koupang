@@ -209,6 +209,7 @@ async fn test_create_thing() {
 
 ## Scripts
 
+- `make run SERVICE=identity` — run a service locally (requires local infra running)
 - `make test SERVICE=identity` — run tests for a service
 - `make migration SERVICE=identity NAME=init` — create a new migration file
 - `make adr` — create a new ADR file (auto-increments number)
