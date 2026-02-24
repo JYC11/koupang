@@ -166,9 +166,10 @@ pub async fn update_product(
         query = query.bind(status.as_str());
     }
 
-    let result = query.execute(&mut *tx).await.map_err(|e| {
-        AppError::InternalServerError(format!("Failed to update product: {}", e))
-    })?;
+    let result = query
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to update product: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Product not found".to_string()));
@@ -178,13 +179,14 @@ pub async fn update_product(
 }
 
 pub async fn delete_product(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
-    let result = sqlx::query(
-        "UPDATE products SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to delete product: {}", e)))?;
+    let result =
+        sqlx::query("UPDATE products SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                AppError::InternalServerError(format!("Failed to delete product: {}", e))
+            })?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Product not found".to_string()));
@@ -195,10 +197,7 @@ pub async fn delete_product(tx: &mut PgConnection, id: Uuid) -> Result<(), AppEr
 
 // ── SKU queries ─────────────────────────────────────────────
 
-pub async fn get_sku_by_id<'e>(
-    executor: impl PgExec<'e>,
-    id: Uuid,
-) -> Result<SkuEntity, AppError> {
+pub async fn get_sku_by_id<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<SkuEntity, AppError> {
     sqlx::query_as::<_, SkuEntity>("SELECT * FROM skus WHERE id = $1 AND deleted_at IS NULL")
         .bind(id)
         .fetch_one(executor)
@@ -311,9 +310,7 @@ pub async fn delete_sku(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError>
             .bind(id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                AppError::InternalServerError(format!("Failed to delete SKU: {}", e))
-            })?;
+            .map_err(|e| AppError::InternalServerError(format!("Failed to delete SKU: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("SKU not found".to_string()));
@@ -324,11 +321,7 @@ pub async fn delete_sku(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError>
 
 // ── Stock operations ────────────────────────────────────────
 
-pub async fn adjust_stock(
-    tx: &mut PgConnection,
-    sku_id: Uuid,
-    delta: i32,
-) -> Result<(), AppError> {
+pub async fn adjust_stock(tx: &mut PgConnection, sku_id: Uuid, delta: i32) -> Result<(), AppError> {
     let result = sqlx::query(
         "UPDATE skus SET stock_quantity = stock_quantity + $1, updated_at = NOW()
          WHERE id = $2 AND deleted_at IS NULL AND stock_quantity + $1 >= 0",

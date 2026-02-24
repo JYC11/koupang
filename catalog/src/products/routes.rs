@@ -115,10 +115,7 @@ async fn delete_product(
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state
-        .service
-        .delete_product(&current_user, id)
-        .await?;
+    app_state.service.delete_product(&current_user, id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Product deleted successfully",
@@ -169,10 +166,7 @@ async fn delete_sku(
     Path(sku_id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state
-        .service
-        .delete_sku(&current_user, sku_id)
-        .await?;
+    app_state.service.delete_sku(&current_user, sku_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "SKU deleted successfully",

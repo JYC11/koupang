@@ -12,6 +12,40 @@ Auth, user management, and profile service.
 - All source lives under `src/users/`
 - gRPC sidecar for inter-service user lookups
 
+## File Layout
+
+```
+identity/
+├── Cargo.toml
+├── CLAUDE.md
+├── migrations/
+│   ├── 202602231305_init.sql
+│   ├── 202602231752_add_email_verification.sql
+│   ├── 202602231807_add_password_reset_tokens.sql
+│   └── 202602232000_add_role_check_constraint.sql
+├── src/
+│   ├── main.rs                    # run_service_with_infra() + gRPC sidecar
+│   ├── lib.rs                     # AppState, app(), GetCurrentUser impl
+│   └── users/
+│       ├── mod.rs
+│       ├── routes.rs              # all HTTP handlers
+│       ├── service.rs             # business logic (validation, hashing, tokens, caching)
+│       ├── repository.rs          # SQL queries (CRUD, token ops)
+│       ├── entities.rs            # UserEntity, EmailVerificationTokenEntity, PasswordResetTokenEntity
+│       ├── dtos.rs                # request/response DTOs + ValidUserCreateReq, ValidUserUpdateReq
+│       ├── value_objects.rs       # Email, Password, Phone, Username
+│       └── grpc_service.rs        # GetUser gRPC handler
+└── tests/
+    ├── integration.rs             # test entry point
+    ├── common/mod.rs              # test_db(), test_app_state(), fixture helpers
+    └── users/
+        ├── mod.rs
+        ├── repository_test.rs     # 31 tests
+        ├── service_test.rs        # 27 tests
+        ├── router_test.rs         # 22 tests
+        └── grpc_service_test.rs   # 8 tests
+```
+
 ## Endpoints (`/api/v1/users`)
 
 **Public:**
@@ -64,6 +98,7 @@ Validated DTOs (`ValidUserCreateReq`, `ValidUserUpdateReq`) are created via `Try
 - **Caching**: Redis user cache, 5-min TTL, key `user:{uuid}`, evicted on update/delete
 - **Transactions**: All writes use `with_transaction()` from shared
 - **Auth guards**: `require_access()` — owner or admin; `require_admin()` — admin only
+- **Auth middleware**: `AuthMiddleware::new()` with `GetCurrentUser` impl (does DB lookup) — identity is the only service that uses this variant
 - **Security**: Silent failure on forgot-password for unknown emails
 
 ## Env Vars
@@ -83,7 +118,7 @@ Located at `migrations/`, referenced as `./.migrations/identity` at runtime.
 
 ## Tests
 
-Integration tests in `tests/` covering repository, service, routes, and gRPC layers. Run with:
+88 tests across 4 files (31 repository + 27 service + 22 router + 8 gRPC). Run with:
 ```
 make test SERVICE=identity
 ```

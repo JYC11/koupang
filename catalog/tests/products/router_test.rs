@@ -6,8 +6,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::products::dtos::ProductDetailRes;
-use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::auth::Role;
+use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::test_utils::http::{body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -77,9 +77,7 @@ fn authed_delete(uri: &str, token: &str) -> Request<Body> {
 }
 
 /// Helper: create a product via router and return (product_id, seller, token)
-async fn create_test_product(
-    pool: &shared::db::PgPool,
-) -> (String, CurrentUser, String) {
+async fn create_test_product(pool: &shared::db::PgPool) -> (String, CurrentUser, String) {
     let state = test_app_state(pool.clone());
     let router = app(state);
     let user = seller();
@@ -414,8 +412,7 @@ async fn list_my_products_returns_only_owned() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let products: Vec<serde_json::Value> =
-        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let products: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(products.len(), 1);
     assert_eq!(
         products[0]["seller_id"].as_str().unwrap(),

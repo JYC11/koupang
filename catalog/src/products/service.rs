@@ -151,10 +151,7 @@ impl CatalogService {
         Ok(SkuRes::new(sku))
     }
 
-    pub async fn list_skus(
-        &self,
-        product_id: Uuid,
-    ) -> Result<Vec<SkuRes>, AppError> {
+    pub async fn list_skus(&self, product_id: Uuid) -> Result<Vec<SkuRes>, AppError> {
         let skus = repository::list_skus_by_product(&self.pool, product_id).await?;
         Ok(skus.into_iter().map(SkuRes::new).collect())
     }
@@ -231,10 +228,7 @@ impl CatalogService {
 
     // ── Images ──────────────────────────────────────────────
 
-    pub async fn list_images(
-        &self,
-        product_id: Uuid,
-    ) -> Result<Vec<ProductImageRes>, AppError> {
+    pub async fn list_images(&self, product_id: Uuid) -> Result<Vec<ProductImageRes>, AppError> {
         let images = repository::list_images_by_product(&self.pool, product_id).await?;
         Ok(images.into_iter().map(ProductImageRes::new).collect())
     }
@@ -265,7 +259,9 @@ impl CatalogService {
         let image = images
             .into_iter()
             .find(|img| img.id == image_id)
-            .ok_or_else(|| AppError::InternalServerError("Image not found after insert".to_string()))?;
+            .ok_or_else(|| {
+                AppError::InternalServerError("Image not found after insert".to_string())
+            })?;
 
         Ok(ProductImageRes::new(image))
     }

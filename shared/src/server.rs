@@ -21,7 +21,10 @@ pub struct GrpcConfig {
 
 /// Convenience type for the gRPC tuple in services that don't run a gRPC sidecar.
 /// Usage: `None::<NoGrpc>`
-pub type NoGrpc = (GrpcConfig, fn(PgPool, SocketAddr) -> std::future::Ready<Result<(), tonic::transport::Error>>);
+pub type NoGrpc = (
+    GrpcConfig,
+    fn(PgPool, SocketAddr) -> std::future::Ready<Result<(), tonic::transport::Error>>,
+);
 
 pub async fn run_service_with_infra<F, G, Fut>(
     config: ServiceConfig,

@@ -20,7 +20,6 @@ impl AppState {
         }
     }
 
-
     pub fn new_with_jwt(pool: PgPool, auth_config: AuthConfig) -> Self {
         Self {
             service: Arc::new(CatalogService::new(pool)),

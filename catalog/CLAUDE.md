@@ -13,6 +13,35 @@ Product info, pricing, inventory, and product images.
 - No gRPC sidecar — HTTP only
 - Claims-based JWT auth (no user DB lookup)
 
+## File Layout
+
+```
+catalog/
+├── Cargo.toml
+├── CLAUDE.md
+├── migrations/
+│   └── 202602241106_init.sql      # products, skus, product_images tables
+├── src/
+│   ├── main.rs                    # run_service_with_infra(), NoGrpc
+│   ├── lib.rs                     # AppState { service, jwt_service }, app()
+│   └── products/
+│       ├── mod.rs
+│       ├── routes.rs              # all HTTP handlers (public + protected)
+│       ├── service.rs             # CatalogService — products, SKUs, images, stock
+│       ├── repository.rs          # SQL queries (dynamic updates, soft deletes)
+│       ├── entities.rs            # ProductEntity, SkuEntity, ProductImageEntity
+│       ├── dtos.rs                # request/response DTOs + validated variants
+│       └── value_objects.rs       # ProductName, Slug, Price, SkuCode, StockQuantity, Currency, ImageUrl, statuses
+└── tests/
+    ├── integration.rs             # test entry point
+    ├── common/mod.rs              # test_db(), test_app_state(), sample fixtures (seller/buyer/admin users, sample DTOs)
+    └── products/
+        ├── mod.rs
+        ├── repository_test.rs     # repository-level tests
+        ├── service_test.rs        # service-level tests
+        └── router_test.rs         # HTTP integration tests
+```
+
 ## Endpoints (`/api/v1/products`)
 
 **Public:**
@@ -82,7 +111,7 @@ Located at `migrations/`, referenced as `./.migrations/catalog` at runtime.
 
 ## Tests
 
-28 unit tests (value objects) + 20 integration tests (repository + service). Run with:
+28 unit tests (value objects) + 20 integration tests (repository + service + router). Run with:
 ```
 make test SERVICE=catalog
 ```

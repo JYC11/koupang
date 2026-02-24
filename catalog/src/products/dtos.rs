@@ -1,7 +1,6 @@
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
 use crate::products::value_objects::{
-    Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug,
-    StockQuantity,
+    Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

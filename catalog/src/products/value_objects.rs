@@ -62,9 +62,7 @@ impl Slug {
         let trimmed = input.trim();
 
         if trimmed.is_empty() {
-            return Err(AppError::BadRequest(
-                "Slug must not be empty".to_string(),
-            ));
+            return Err(AppError::BadRequest("Slug must not be empty".to_string()));
         }
 
         if trimmed.len() > 500 {

@@ -2,6 +2,53 @@
 
 Reusable libraries and infrastructure code shared across all microservices.
 
+## File Layout
+
+```
+shared/
+├── Cargo.toml
+├── CLAUDE.md
+├── build.rs                       # protobuf compilation
+├── proto/
+│   └── identity.proto             # GetUser RPC definition
+└── src/
+    ├── lib.rs                     # re-exports all modules
+    ├── server.rs                  # run_service_with_infra(), ServiceConfig, GrpcConfig, NoGrpc
+    ├── observability.rs           # init_tracing()
+    ├── health.rs                  # health_routes()
+    ├── errors.rs                  # AppError enum → IntoResponse
+    ├── responses.rs               # ok(), success(), created()
+    ├── dto_helpers.rs             # fmt_id(), fmt_datetime(), fmt_datetime_opt()
+    ├── auth/
+    │   ├── mod.rs
+    │   ├── jwt.rs                 # JwtService, CurrentUser, AccessTokenClaims, JwtTokens
+    │   ├── middleware.rs          # AuthMiddleware (::new for identity, ::new_claims_based for others)
+    │   ├── guards.rs              # require_access(), require_admin()
+    │   └── role.rs                # Role enum (Buyer, Seller, Admin)
+    ├── db/
+    │   ├── mod.rs                 # init_db(), PgPool, PgExec, PgConnection type aliases
+    │   ├── transaction_support.rs # TxContext, with_transaction(), with_nested_transaction()
+    │   └── pagination_support.rs  # keyset_paginate(), get_cursors(), PaginationParams, PaginationRes, HasId
+    ├── config/
+    │   ├── mod.rs
+    │   ├── db_config.rs           # DbConfig::new(env_key)
+    │   ├── auth_config.rs         # AuthConfig::new(), ::for_tests()
+    │   ├── redis_config.rs        # RedisConfig::new(), ::try_new()
+    │   └── kafka_config.rs        # KafkaConfig { brokers }
+    ├── cache/
+    │   └── mod.rs                 # init_redis(), init_optional_redis()
+    ├── email/
+    │   └── mod.rs                 # EmailService trait, EmailMessage, MockEmailService
+    ├── grpc/
+    │   └── mod.rs                 # grpc::identity (generated protobuf)
+    └── test_utils/                # behind `test-utils` feature flag
+        ├── mod.rs
+        ├── db.rs                  # TestDb::start(migrations_dir) → ephemeral Postgres 18
+        ├── redis.rs               # TestRedis::start() → ephemeral Redis
+        ├── http.rs                # body_bytes(), body_json()
+        └── grpc.rs                # start_test_grpc_server()
+```
+
 ## Modules
 
 ### Bootstrap & Infra (`server`)
@@ -66,7 +113,8 @@ Reusable libraries and infrastructure code shared across all microservices.
 #### Middleware (`auth::middleware`)
 
 - `GetCurrentUser` trait — implement `async fn get_by_id(id: Uuid) -> Result<CurrentUser, AppError>` per service
-- `AuthMiddleware::new(Arc<JwtService>, Arc<dyn GetCurrentUser>)` — JWT validation layer, inserts `CurrentUser` and `AccessTokenClaims` into request extensions
+- `AuthMiddleware::new(Arc<JwtService>, Arc<dyn GetCurrentUser>)` — JWT validation layer with DB lookup (identity service only)
+- `AuthMiddleware::new_claims_based(Arc<JwtService>)` — JWT validation from claims only, no DB lookup (all other services, see ADR-008)
 
 #### Guards (`auth::guards`)
 
@@ -116,6 +164,6 @@ Reusable libraries and infrastructure code shared across all microservices.
 
 | Trait | Module | Purpose |
 |-------|--------|---------|
-| `GetCurrentUser` | `auth::middleware` | User lookup for auth middleware |
+| `GetCurrentUser` | `auth::middleware` | User lookup for auth middleware (identity only; others use claims-based) |
 | `HasId` | `db::pagination_support` | Enables cursor-based pagination |
 | `EmailService` | `email` | Email sending (use `MockEmailService` for dev) |

@@ -64,12 +64,10 @@ impl AuthMiddleware {
 
         // 3. Build CurrentUser — either from DB or from JWT claims
         let current_user = match &self.current_user_getter {
-            Some(getter) => {
-                getter
-                    .get_by_id(claims.sub)
-                    .await
-                    .map_err(|_| AuthMiddlewareError::UserNotFound)?
-            }
+            Some(getter) => getter
+                .get_by_id(claims.sub)
+                .await
+                .map_err(|_| AuthMiddlewareError::UserNotFound)?,
             None => CurrentUser {
                 id: claims.sub,
                 role: claims.role.clone(),

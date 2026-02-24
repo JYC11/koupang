@@ -1,7 +1,7 @@
-use crate::common::{sample_create_product_req, sample_create_sku_req, sample_add_image_req, test_db};
-use catalog::products::dtos::{
-    ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq,
+use crate::common::{
+    sample_add_image_req, sample_create_product_req, sample_create_sku_req, test_db,
 };
+use catalog::products::dtos::{ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq};
 use catalog::products::repository;
 use uuid::Uuid;
 
