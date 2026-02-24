@@ -11,8 +11,16 @@ if [ $# -eq 0 ]; then
     done
     echo ""
     read -p "Enter service name: " service_name
-else
+    read -p "Enter migration name: " migration_name
+elif [ $# -eq 1 ]; then
     service_name="$1"
+    read -p "Enter migration name: " migration_name
+elif [ $# -ge 2 ]; then
+    service_name="$1"
+    migration_name="$2"
+else
+    echo "Usage: make migration SERVICE=<service-name> NAME=<migration-name>"
+    exit 1
 fi
 
 # Validate service exists
@@ -20,9 +28,6 @@ if [ ! -d "$service_name" ]; then
     echo "Error: Service '$service_name' not found"
     exit 1
 fi
-
-# Prompt for migration name
-read -p "Enter migration name: " migration_name
 
 # Generate timestamp
 datetime=$(date '+%Y%m%d%H%M')
