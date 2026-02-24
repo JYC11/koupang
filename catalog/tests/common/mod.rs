@@ -7,7 +7,7 @@ use shared::auth::jwt::CurrentUser;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::test_utils::db::TestDb;
-use std::sync::Arc;
+use uuid::Uuid;
 
 pub async fn test_db() -> TestDb {
     TestDb::start("./migrations").await
@@ -58,8 +58,8 @@ pub fn sample_create_product_req() -> CreateProductReq {
         description: Some("A test product".to_string()),
         base_price: Decimal::new(1999, 2), // 19.99
         currency: None,                    // defaults to USD
-        category: Some("Electronics".to_string()),
-        brand: Some("TestBrand".to_string()),
+        category_id: None,
+        brand_id: None,
     }
 }
 
@@ -70,8 +70,8 @@ pub fn sample_create_product_req_2() -> CreateProductReq {
         description: None,
         base_price: Decimal::new(4999, 2), // 49.99
         currency: Some("KRW".to_string()),
-        category: None,
-        brand: None,
+        category_id: None,
+        brand_id: None,
     }
 }
 
@@ -90,5 +90,67 @@ pub fn sample_add_image_req() -> AddProductImageReq {
         alt_text: Some("Widget front view".to_string()),
         sort_order: Some(0),
         is_primary: Some(true),
+    }
+}
+
+// ── Category / Brand test fixtures ─────────────────────────
+
+pub async fn create_test_category(pool: &PgPool) -> Uuid {
+    create_test_category_named(pool, "Electronics").await
+}
+
+pub async fn create_test_category_named(pool: &PgPool, name: &str) -> Uuid {
+    let slug = name.to_lowercase().replace(' ', "-");
+    // ltree labels use underscores, not hyphens
+    let path_label = slug.replace('-', "_");
+    let row: (Uuid,) = sqlx::query_as(
+        "INSERT INTO categories (name, slug, path, depth) VALUES ($1, $2, $3::ltree, 0) RETURNING id",
+    )
+    .bind(name)
+    .bind(&slug)
+    .bind(&path_label)
+    .fetch_one(pool)
+    .await
+    .expect("Failed to create test category");
+    row.0
+}
+
+pub async fn create_test_brand(pool: &PgPool) -> Uuid {
+    create_test_brand_named(pool, "Acme Corp").await
+}
+
+pub async fn create_test_brand_named(pool: &PgPool, name: &str) -> Uuid {
+    let slug = name.to_lowercase().replace(' ', "-");
+    let row: (Uuid,) =
+        sqlx::query_as("INSERT INTO brands (name, slug) VALUES ($1, $2) RETURNING id")
+            .bind(name)
+            .bind(&slug)
+            .fetch_one(pool)
+            .await
+            .expect("Failed to create test brand");
+    row.0
+}
+
+pub async fn associate_brand_category(pool: &PgPool, brand_id: Uuid, category_id: Uuid) {
+    sqlx::query("INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)")
+        .bind(brand_id)
+        .bind(category_id)
+        .execute(pool)
+        .await
+        .expect("Failed to associate brand with category");
+}
+
+pub fn sample_create_product_with_fks(
+    category_id: Option<Uuid>,
+    brand_id: Option<Uuid>,
+) -> CreateProductReq {
+    CreateProductReq {
+        name: "FK Test Widget".to_string(),
+        slug: None,
+        description: Some("A product with FK references".to_string()),
+        base_price: Decimal::new(2999, 2),
+        currency: None,
+        category_id,
+        brand_id,
     }
 }

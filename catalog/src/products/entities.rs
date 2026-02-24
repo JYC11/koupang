@@ -17,9 +17,14 @@ pub struct ProductEntity {
     pub description: Option<String>,
     pub base_price: Decimal,
     pub currency: String,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
     pub status: ProductStatus,
+    // Populated by LEFT JOINs (NULL when no FK set)
+    pub category_name: Option<String>,
+    pub category_slug: Option<String>,
+    pub brand_name: Option<String>,
+    pub brand_slug: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]

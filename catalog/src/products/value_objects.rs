@@ -4,116 +4,20 @@ use rust_decimal::Decimal;
 use shared::errors::AppError;
 use std::fmt;
 
-// ── Regexes (compiled once) ─────────────────────────────────
+// Re-export shared value objects so existing imports still work
+pub use crate::common::value_objects::{HttpUrl, Slug};
 
-static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)*$").unwrap());
+// Type alias for backwards compatibility
+pub type ImageUrl = HttpUrl;
+
+// ── Regexes (compiled once) ─────────────────────────────────
 
 static SKU_CODE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,98}[A-Za-z0-9]$").unwrap());
 
-static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^https?://.+").unwrap());
+// ── ProductName (via macro) ───────────────────────────────
 
-// ── ProductName ─────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct ProductName(String);
-
-impl ProductName {
-    pub fn new(input: &str) -> Result<Self, AppError> {
-        let trimmed = input.trim();
-
-        if trimmed.is_empty() {
-            return Err(AppError::BadRequest(
-                "Product name must not be empty".to_string(),
-            ));
-        }
-
-        if trimmed.len() > 500 {
-            return Err(AppError::BadRequest(
-                "Product name must not exceed 500 characters".to_string(),
-            ));
-        }
-
-        Ok(Self(trimmed.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl fmt::Display for ProductName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-// ── Slug ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct Slug(String);
-
-impl Slug {
-    pub fn new(input: &str) -> Result<Self, AppError> {
-        let trimmed = input.trim();
-
-        if trimmed.is_empty() {
-            return Err(AppError::BadRequest("Slug must not be empty".to_string()));
-        }
-
-        if trimmed.len() > 500 {
-            return Err(AppError::BadRequest(
-                "Slug must not exceed 500 characters".to_string(),
-            ));
-        }
-
-        if !SLUG_RE.is_match(trimmed) {
-            return Err(AppError::BadRequest(
-                "Slug must be lowercase alphanumeric with hyphens (e.g. my-product-name)"
-                    .to_string(),
-            ));
-        }
-
-        Ok(Self(trimmed.to_string()))
-    }
-
-    /// Generate a slug from a product name by lowercasing and replacing non-alphanumeric with hyphens.
-    pub fn from_name(name: &str) -> Result<Self, AppError> {
-        let slug: String = name
-            .trim()
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect();
-
-        // collapse consecutive hyphens and trim leading/trailing hyphens
-        let slug = slug
-            .split('-')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("-");
-
-        Self::new(&slug)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl fmt::Display for Slug {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+crate::validated_name!(ProductName, "Product name", 500);
 
 // ── Price ───────────────────────────────────────────────────
 
@@ -258,45 +162,6 @@ impl fmt::Display for Currency {
     }
 }
 
-// ── ImageUrl ────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct ImageUrl(String);
-
-impl ImageUrl {
-    pub fn new(input: &str) -> Result<Self, AppError> {
-        let trimmed = input.trim();
-
-        if !URL_RE.is_match(trimmed) {
-            return Err(AppError::BadRequest(
-                "Image URL must start with http:// or https://".to_string(),
-            ));
-        }
-
-        if trimmed.len() > 2048 {
-            return Err(AppError::BadRequest(
-                "Image URL must not exceed 2048 characters".to_string(),
-            ));
-        }
-
-        Ok(Self(trimmed.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl fmt::Display for ImageUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 // ── ProductStatus ───────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type)]
@@ -385,7 +250,7 @@ mod tests {
         assert!(ProductName::new(&long).is_err());
     }
 
-    // ── Slug tests ───────────────────────────────────────────
+    // ── Slug tests (from common, verify re-export) ──────────
 
     #[test]
     fn slug_valid() {
@@ -502,7 +367,7 @@ mod tests {
         assert_eq!(Currency::default().as_str(), "USD");
     }
 
-    // ── ImageUrl tests ───────────────────────────────────────
+    // ── ImageUrl tests (alias for HttpUrl) ──────────────────
 
     #[test]
     fn image_url_valid() {

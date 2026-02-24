@@ -8,7 +8,7 @@
 |---------|--------|---------------|------------|------|
 | shared | Complete | Shared libraries | — | [shared/CLAUDE.md](shared/CLAUDE.md) |
 | identity | Complete (88 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog | Complete (48 tests) | Products, Pricing, Inventory | Products, SKUs, Images, Stock | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
+| catalog | Complete (111 tests) | Products, Pricing, Inventory | Products, SKUs, Images, Stock | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
 | order | Stub | Order lifecycle (state machine) | Orders, Order Items | — |
 | payment | Stub | Payment gateway, wallets | Transactions, Invoices | — |
 | shipping | Stub | Logistics, tracking | Shipments, Carriers | — |
@@ -27,8 +27,8 @@ koupang/
 ├── .plan/                      # critical-user-flows.md, ADRs (001–008), progress summaries
 ├── shared/                     # COMPLETE — see shared/CLAUDE.md
 │   └── src/                    # server, auth/, db/, config/, cache/, email/, errors, responses, test_utils/
-├── identity/                   # COMPLETE — see identity/CLAUDE.md
-├── catalog/                    # COMPLETE — see catalog/CLAUDE.md
+├── identity/                   # COMPLETE — see identity/CLAUDE.md IF you are working on identity
+├── catalog/                    # COMPLETE — see catalog/CLAUDE.md IF you are working on catalog
 ├── order/                      # STUB
 ├── payment/                    # STUB
 ├── shipping/                   # STUB
@@ -49,7 +49,7 @@ koupang/
 |---|----------|-----------------|
 | 001 | Cargo workspace per service | Single `cargo build`, shared deps |
 | 002 | UUID v7 primary keys | Time-ordered, good B-tree locality |
-| 003 | Layered architecture | routes → service → repository |
+| 003 | Layered architecture | routes → service → domain → repository |
 | 004 | Testcontainers over mocks | Real Postgres 18 / Redis in tests, single-threaded |
 | 005 | JWT access + refresh tokens | Stateless access tokens, no DB lookup |
 | 006 | Email trait with mock | Decoupled from provider, `MockEmailService` for dev |
@@ -143,7 +143,7 @@ Use catalog as the reference implementation:
    }
    ```
 3. **Create `src/lib.rs`** — define `AppState` (wraps `Arc<Service>` + `Arc<JwtService>`) and `app()` fn
-4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`
+4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `domain.rs`, `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`
 5. **Create first migration**: `make migration SERVICE=<name> NAME=init`
 6. **Auth**: use `AuthMiddleware::new_claims_based(jwt_service)` for non-identity services (ADR-008)
 7. **Tests**: create `tests/integration.rs`, `tests/common/mod.rs` (with `test_db()`, `test_app_state()`, sample fixtures), and per-module test files
@@ -152,10 +152,10 @@ Use catalog as the reference implementation:
 
 ## Common Code Patterns
 
-### Adding an endpoint (route → service → repository)
+### Adding an endpoint (route → service → domain → repository)
 
 ```rust
-// routes.rs — define handler, extract state + auth + body
+// routes.rs — HTTP handler, extracts state + auth + body
 async fn create_thing(
     State(state): State<AppState>,
     current_user: CurrentUser,
@@ -165,22 +165,48 @@ async fn create_thing(
     Ok(created("Thing created"))
 }
 
-// service.rs — validate inputs, enforce business rules, use transaction
+// service.rs — orchestration only (no business logic)
 pub async fn create_thing(&self, user: &CurrentUser, req: CreateThingReq) -> Result<ThingDto, AppError> {
-    let validated = ValidCreateThingReq::try_from(req)?;
+    let vo_validated = ValidCreateThingReq::try_from(req)?;         // Step 1: VO validation (dtos.rs)
+    let validated = ValidatedCreateThing::new(&self.pool, vo_validated).await?;  // Step 2: domain validation (dtos.rs)
     let entity = with_transaction(&self.pool, |tx| async move {
-        ThingRepository::insert(tx.as_executor(), &validated, user.id).await
+        repository::create_thing(tx.as_executor(), &validated, user.id).await
     }).await?;
     Ok(ThingDto::from(entity))
 }
 
+// domain.rs — rich domain model objects (all fields are value objects)
+pub struct Thing {
+    pub id: Uuid,
+    pub name: ThingName,       // not String — value object with invariants
+    pub price: Price,          // not Decimal — value object enforcing >= 0
+    pub category_id: Option<Uuid>,  // future: Option<Category> for traversal
+}
+impl TryFrom<ThingEntity> for Thing { /* lift raw DB row into rich domain model */ }
+
 // repository.rs — pure SQL, takes PgConnection for writes, PgExec for reads
-pub async fn insert(conn: &mut PgConnection, req: &ValidCreateThingReq, user_id: Uuid) -> Result<ThingEntity, AppError> {
+pub async fn create_thing(conn: &mut PgConnection, req: &ValidatedCreateThing, user_id: Uuid) -> Result<ThingEntity, AppError> {
     sqlx::query_as!(ThingEntity, "INSERT INTO things ...")
         .fetch_one(conn).await
         .map_err(|e| AppError::InternalServerError(e.to_string()))
 }
 ```
+
+### Domain layer pattern
+
+Each module has a `domain.rs` with rich domain model objects:
+
+```
+entities.rs   → Raw DB rows (String, Decimal, Uuid) — used by sqlx FromRow
+domain.rs     → Rich domain objects (ProductName, Price, Currency) — business logic lives here
+dtos.rs       → Request/response DTOs + validated request types (VO validation + FK validation)
+value_objects.rs → Newtype wrappers enforcing invariants (non-empty, range, format)
+```
+
+- **Entity → Domain**: `TryFrom<Entity>` lifts primitives into value objects
+- **Domain objects** carry all invariants via the type system; business rules are methods on these types
+- **FK references** are currently `Option<Uuid>` — will evolve to embedded domain objects for traversable graphs
+- **Validated request types** (e.g. `ValidatedCreateProduct`) enforce FK existence + cross-entity rules before reaching the repository
 
 ### Writing an integration test
 

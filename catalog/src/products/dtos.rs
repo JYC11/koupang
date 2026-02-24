@@ -1,12 +1,14 @@
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
+use crate::products::repository;
 use crate::products::value_objects::{
     Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use shared::db::PgPool;
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
-
+use uuid::Uuid;
 // ── Product Request DTOs ────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,8 +18,8 @@ pub struct CreateProductReq {
     pub description: Option<String>,
     pub base_price: Decimal,
     pub currency: Option<String>,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,8 +29,8 @@ pub struct UpdateProductReq {
     pub description: Option<String>,
     pub base_price: Option<Decimal>,
     pub currency: Option<String>,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
     pub status: Option<ProductStatus>,
 }
 
@@ -73,9 +75,13 @@ pub struct ProductRes {
     pub description: Option<String>,
     pub base_price: Decimal,
     pub currency: String,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<String>,
+    pub brand_id: Option<String>,
     pub status: ProductStatus,
+    pub category_name: Option<String>,
+    pub category_slug: Option<String>,
+    pub brand_name: Option<String>,
+    pub brand_slug: Option<String>,
 }
 
 impl ProductRes {
@@ -90,9 +96,13 @@ impl ProductRes {
             description: entity.description,
             base_price: entity.base_price,
             currency: entity.currency,
-            category: entity.category,
-            brand: entity.brand,
+            category_id: entity.category_id.map(|id| fmt_id(&id)),
+            brand_id: entity.brand_id.map(|id| fmt_id(&id)),
             status: entity.status,
+            category_name: entity.category_name,
+            category_slug: entity.category_slug,
+            brand_name: entity.brand_name,
+            brand_slug: entity.brand_slug,
         }
     }
 }
@@ -168,8 +178,8 @@ pub struct ValidCreateProductReq {
     pub description: Option<String>,
     pub base_price: Price,
     pub currency: Currency,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
 }
 
 impl TryFrom<CreateProductReq> for ValidCreateProductReq {
@@ -193,8 +203,8 @@ impl TryFrom<CreateProductReq> for ValidCreateProductReq {
             description: req.description,
             base_price,
             currency,
-            category: req.category,
-            brand: req.brand,
+            category_id: req.category_id,
+            brand_id: req.brand_id,
         })
     }
 }
@@ -206,8 +216,8 @@ pub struct ValidUpdateProductReq {
     pub description: Option<String>,
     pub base_price: Option<Price>,
     pub currency: Option<Currency>,
-    pub category: Option<String>,
-    pub brand: Option<String>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
     pub status: Option<ProductStatus>,
 }
 
@@ -226,11 +236,103 @@ impl TryFrom<UpdateProductReq> for ValidUpdateProductReq {
             description: req.description,
             base_price,
             currency,
-            category: req.category,
-            brand: req.brand,
+            category_id: req.category_id,
+            brand_id: req.brand_id,
             status: req.status,
         })
     }
+}
+
+/// Fully validated product for creation.
+/// Can only be constructed via `new()` which enforces:
+/// - category_id references an existing category (if set)
+/// - brand_id references an existing brand (if set)
+/// - brand is associated with category via brand_categories (if both set)
+pub struct ValidatedCreateProduct {
+    pub name: ProductName,
+    pub slug: Slug,
+    pub description: Option<String>,
+    pub base_price: Price,
+    pub currency: Currency,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
+}
+
+impl ValidatedCreateProduct {
+    pub async fn new(pool: &PgPool, req: ValidCreateProductReq) -> Result<Self, AppError> {
+        validate_fk_references(pool, req.category_id, req.brand_id).await?;
+        Ok(Self {
+            name: req.name,
+            slug: req.slug,
+            description: req.description,
+            base_price: req.base_price,
+            currency: req.currency,
+            category_id: req.category_id,
+            brand_id: req.brand_id,
+        })
+    }
+}
+
+/// Fully validated product update.
+/// Validates effective FK state (new values merged with existing product).
+pub struct ValidatedUpdateProduct {
+    pub name: Option<ProductName>,
+    pub slug: Option<Slug>,
+    pub description: Option<String>,
+    pub base_price: Option<Price>,
+    pub currency: Option<Currency>,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
+    pub status: Option<ProductStatus>,
+}
+
+impl ValidatedUpdateProduct {
+    pub async fn new(
+        pool: &PgPool,
+        req: ValidUpdateProductReq,
+        existing: &ProductEntity,
+    ) -> Result<Self, AppError> {
+        // Merge: use updated value if present, else keep existing
+        let effective_category = req.category_id.or(existing.category_id);
+        let effective_brand = req.brand_id.or(existing.brand_id);
+        validate_fk_references(pool, effective_category, effective_brand).await?;
+        Ok(Self {
+            name: req.name,
+            slug: req.slug,
+            description: req.description,
+            base_price: req.base_price,
+            currency: req.currency,
+            category_id: req.category_id,
+            brand_id: req.brand_id,
+            status: req.status,
+        })
+    }
+}
+
+/// Core FK validation: existence checks + brand-category association.
+async fn validate_fk_references(
+    pool: &PgPool,
+    category_id: Option<Uuid>,
+    brand_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    if let Some(cat_id) = category_id {
+        if !repository::category_exists(pool, cat_id).await? {
+            return Err(AppError::BadRequest("Category does not exist".to_string()));
+        }
+    }
+    if let Some(br_id) = brand_id {
+        if !repository::brand_exists(pool, br_id).await? {
+            return Err(AppError::BadRequest("Brand does not exist".to_string()));
+        }
+    }
+    if let (Some(cat_id), Some(br_id)) = (category_id, brand_id) {
+        if !repository::is_brand_in_category(pool, br_id, cat_id).await? {
+            return Err(AppError::BadRequest(
+                "Brand is not associated with the specified category".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

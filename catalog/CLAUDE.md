@@ -8,8 +8,10 @@ Product info, pricing, inventory, and product images.
 
 ## Architecture
 
-- Layered: `routes` → `service` → `repository` → DB
-- All source lives under `src/products/`
+- Layered: `routes` → `service` → `domain` → `repository` → DB
+- Each module has a `domain.rs` with rich domain model objects where all fields are value objects (not raw primitives)
+- `dtos.rs` handles VO validation for requests + FK/cross-entity validation via `Validated*` types
+- Modules: `src/products/`, `src/categories/`, `src/brands/`, `src/common/`
 - No gRPC sidecar — HTTP only
 - Claims-based JWT auth (no user DB lookup)
 
@@ -24,13 +26,19 @@ catalog/
 ├── src/
 │   ├── main.rs                    # run_service_with_infra(), NoGrpc
 │   ├── lib.rs                     # AppState { service, jwt_service }, app()
+│   ├── common/
+│   │   ├── mod.rs
+│   │   └── value_objects.rs       # validated_name! macro, Slug, HttpUrl (shared across modules)
+│   ├── categories/                # Category CRUD (ltree hierarchy)
+│   ├── brands/                    # Brand CRUD + brand-category associations
 │   └── products/
 │       ├── mod.rs
 │       ├── routes.rs              # all HTTP handlers (public + protected)
-│       ├── service.rs             # CatalogService — products, SKUs, images, stock
-│       ├── repository.rs          # SQL queries (dynamic updates, soft deletes)
-│       ├── entities.rs            # ProductEntity, SkuEntity, ProductImageEntity
-│       ├── dtos.rs                # request/response DTOs + validated variants
+│       ├── service.rs             # CatalogService — orchestration only
+│       ├── domain.rs              # Rich domain models: Product, Sku (all fields are value objects)
+│       ├── repository.rs          # SQL queries with LEFT JOINs, FK existence helpers
+│       ├── entities.rs            # ProductEntity (raw DB row), SkuEntity, ProductImageEntity
+│       ├── dtos.rs                # Request/response DTOs + validated variants (VO + FK validation)
 │       └── value_objects.rs       # ProductName, Slug, Price, SkuCode, StockQuantity, Currency, ImageUrl, statuses
 └── tests/
     ├── integration.rs             # test entry point
@@ -67,9 +75,22 @@ catalog/
 | POST | `/{product_id}/images` | Add image (product owner or admin) |
 | DELETE | `/{product_id}/images/{image_id}` | Delete image (product owner or admin) |
 
-## Entities
+## Domain Models (`domain.rs`)
 
-- `ProductEntity` — id, seller_id, name, slug (unique), description, base_price (Decimal), currency, category, brand, status, soft-delete
+Rich types where every field is a value object. Business logic goes here.
+
+| Domain Type | Fields (value objects) | Constructed via |
+|-------------|----------------------|-----------------|
+| `Product` | `ProductName`, `Slug`, `Price`, `Currency`, `ProductStatus` + FK UUIDs | `TryFrom<ProductEntity>` |
+| `Sku` | `SkuCode`, `Price`, `StockQuantity` + product_id UUID | `TryFrom<(Uuid, SkuEntity)>` |
+| `Brand` | `BrandName`, `Slug`, `HttpUrl` (logo) | `TryFrom<BrandEntity>` |
+| `Category` | `CategoryName`, `Slug`, `LtreeLabel` + parent/depth | `TryFrom<CategoryEntity>` |
+
+FK references are currently `Option<Uuid>` — planned evolution to embedded domain objects for traversable graphs.
+
+## Entities (raw DB rows)
+
+- `ProductEntity` — id, seller_id, name, slug (unique), description, base_price (Decimal), currency, category_id (FK), brand_id (FK), status, soft-delete + joined fields: category_name, category_slug, brand_name, brand_slug
 - `SkuEntity` — id, product_id, sku_code (unique), price (Decimal), stock_quantity, attributes (JSONB), status, soft-delete
 - `ProductImageEntity` — id, product_id, url, alt_text, sort_order, is_primary (no soft-delete)
 
@@ -95,6 +116,9 @@ catalog/
 - **Transactions:** All writes use `with_transaction()` from shared
 - **Soft deletes:** Products and SKUs use `deleted_at`; images are hard-deleted
 - **Partial updates:** Dynamic SQL for product and SKU updates (only provided fields)
+- **Domain models:** `domain.rs` has rich types (all fields are VOs); business logic goes here
+- **FK validation:** `dtos.rs` validated request types enforce FK existence + brand-category association
+- **LEFT JOINs:** All product reads JOIN categories/brands to include names/slugs in responses
 
 ## Env Vars
 
@@ -111,7 +135,7 @@ Located at `migrations/`, referenced as `./.migrations/catalog` at runtime.
 
 ## Tests
 
-28 unit tests (value objects) + 20 integration tests (repository + service + router). Run with:
+58 unit tests (value objects) + 53 integration tests (repository + service + router). Run with:
 ```
 make test SERVICE=catalog
 ```
