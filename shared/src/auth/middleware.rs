@@ -20,14 +20,25 @@ pub trait GetCurrentUser: Send + Sync {
 #[derive(Clone)]
 pub struct AuthMiddleware {
     jwt_service: Arc<JwtService>,
-    current_user_getter: Arc<dyn GetCurrentUser>,
+    current_user_getter: Option<Arc<dyn GetCurrentUser>>,
 }
 
 impl AuthMiddleware {
+    /// Full auth: validates JWT then fetches user from DB via GetCurrentUser.
+    /// Used by Identity service which owns the user table.
     pub fn new(jwt_service: Arc<JwtService>, current_user_getter: Arc<dyn GetCurrentUser>) -> Self {
         Self {
             jwt_service,
-            current_user_getter,
+            current_user_getter: Some(current_user_getter),
+        }
+    }
+
+    /// Claims-based auth: validates JWT and trusts the embedded claims to build CurrentUser.
+    /// Used by downstream services (Catalog, Order, etc.) that don't have direct DB access to users.
+    pub fn new_claims_based(jwt_service: Arc<JwtService>) -> Self {
+        Self {
+            jwt_service,
+            current_user_getter: None,
         }
     }
 
@@ -51,13 +62,19 @@ impl AuthMiddleware {
                 _ => AuthMiddlewareError::InvalidToken,
             })?;
 
-        // 3. Fetch current user
-        let user_id = claims.sub;
-        let current_user = self
-            .current_user_getter
-            .get_by_id(user_id)
-            .await
-            .map_err(|_| AuthMiddlewareError::UserNotFound)?;
+        // 3. Build CurrentUser — either from DB or from JWT claims
+        let current_user = match &self.current_user_getter {
+            Some(getter) => {
+                getter
+                    .get_by_id(claims.sub)
+                    .await
+                    .map_err(|_| AuthMiddlewareError::UserNotFound)?
+            }
+            None => CurrentUser {
+                id: claims.sub,
+                role: claims.role.clone(),
+            },
+        };
 
         // 4. Store CurrentUser in request extensions
         req.extensions_mut().insert(current_user);
