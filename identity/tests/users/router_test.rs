@@ -619,7 +619,7 @@ async fn reset_password_with_valid_token_returns_200() {
         .unwrap();
 
     // Reset password
-    let reset_req = serde_json::json!({ "token": row.0, "new_password": "newpass123" });
+    let reset_req = serde_json::json!({ "token": row.0, "new_password": "NewPass1!" });
     let resp = router
         .oneshot(
             Request::builder()
@@ -641,7 +641,7 @@ async fn reset_password_with_invalid_token_returns_error() {
     let state = test_app_state(pool);
     let router = app(state);
 
-    let reset_req = serde_json::json!({ "token": "bad-token", "new_password": "newpass123" });
+    let reset_req = serde_json::json!({ "token": "bad-token", "new_password": "NewPass1!" });
     let resp = router
         .oneshot(
             Request::builder()
@@ -673,7 +673,7 @@ async fn change_password_returns_200() {
 
     let change_req = serde_json::json!({
         "current_password": req.password,
-        "new_password": "newpassword456"
+        "new_password": "NewPassword4!"
     });
     let resp = router
         .oneshot(
@@ -701,7 +701,7 @@ async fn change_password_wrong_current_returns_error() {
 
     let change_req = serde_json::json!({
         "current_password": "wrongpassword",
-        "new_password": "newpassword456"
+        "new_password": "NewPassword4!"
     });
     let resp = router
         .oneshot(
@@ -763,7 +763,7 @@ async fn change_password_without_auth_returns_401() {
 
     let change_req = serde_json::json!({
         "current_password": "password123",
-        "new_password": "newpassword456"
+        "new_password": "NewPassword4!"
     });
     let resp = router
         .oneshot(

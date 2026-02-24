@@ -1,4 +1,4 @@
-use crate::users::dtos::{UserCreateReq, UserUpdateReq};
+use crate::users::dtos::{ValidUserCreateReq, ValidUserUpdateReq};
 use crate::users::entities::{EmailVerificationTokenEntity, PasswordResetTokenEntity, UserEntity};
 use chrono::{DateTime, Utc};
 use shared::db::PgExec;
@@ -30,16 +30,20 @@ pub async fn get_user_by_username<'e>(
     .map_err(|e| AppError::NotFound(format!("User not found: {}", e)))
 }
 
-pub async fn create_user(tx: &mut PgConnection, req: UserCreateReq) -> Result<Uuid, AppError> {
+pub async fn create_user(
+    tx: &mut PgConnection,
+    req: ValidUserCreateReq,
+    hashed_password: &str,
+) -> Result<Uuid, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO users (username, password, email, phone, role)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id",
     )
-    .bind(&req.username)
-    .bind(&req.password)
-    .bind(&req.email)
-    .bind(&req.phone)
+    .bind(req.username.as_str())
+    .bind(hashed_password)
+    .bind(req.email.as_str())
+    .bind(req.phone.as_str())
     .bind(&req.role)
     .fetch_one(&mut *tx)
     .await
@@ -111,16 +115,16 @@ pub async fn verify_user_email(tx: &mut PgConnection, user_id: Uuid) -> Result<(
 pub async fn update_user(
     tx: &mut PgConnection,
     id: Uuid,
-    req: UserUpdateReq,
+    req: ValidUserUpdateReq,
 ) -> Result<(), AppError> {
     let result = sqlx::query(
         "UPDATE users
              SET username = $1, email = $2, phone = $3, role = $4, updated_at = NOW()
              WHERE id = $5 AND deleted_at IS NULL",
     )
-    .bind(&req.username)
-    .bind(&req.email)
-    .bind(&req.phone)
+    .bind(req.username.as_str())
+    .bind(req.email.as_str())
+    .bind(req.phone.as_str())
     .bind(&req.role)
     .bind(id)
     .execute(&mut *tx)

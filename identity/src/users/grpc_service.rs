@@ -17,6 +17,7 @@ impl IdentityGrpcService {
 
 #[tonic::async_trait]
 impl IdentityService for IdentityGrpcService {
+    // this could potentially be called A LOT, so there could be a lot more optimizing done if needed
     async fn get_user(
         &self,
         request: Request<GetUserRequest>,

@@ -1,4 +1,5 @@
 use crate::users::entities::UserEntity;
+use crate::users::value_objects::{Email, Password, Phone, Username};
 use serde::{Deserialize, Serialize};
 use shared::auth::Role;
 use shared::auth::jwt::JwtTokens;
@@ -93,4 +94,50 @@ pub struct ResetPasswordReq {
 pub struct ChangePasswordReq {
     pub current_password: String,
     pub new_password: String,
+}
+
+// ── Validated DTOs ──────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ValidUserCreateReq {
+    pub username: Username,
+    pub password: Password,
+    pub email: Email,
+    pub phone: Phone,
+    pub role: Role,
+}
+
+impl TryFrom<UserCreateReq> for ValidUserCreateReq {
+    type Error = AppError;
+
+    fn try_from(req: UserCreateReq) -> Result<Self, Self::Error> {
+        Ok(Self {
+            username: Username::new(&req.username)?,
+            password: Password::new(&req.password)?,
+            email: Email::new(&req.email)?,
+            phone: Phone::new(&req.phone)?,
+            role: req.role,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidUserUpdateReq {
+    pub username: Username,
+    pub email: Email,
+    pub phone: Phone,
+    pub role: Role,
+}
+
+impl TryFrom<UserUpdateReq> for ValidUserUpdateReq {
+    type Error = AppError;
+
+    fn try_from(req: UserUpdateReq) -> Result<Self, Self::Error> {
+        Ok(Self {
+            username: Username::new(&req.username)?,
+            email: Email::new(&req.email)?,
+            phone: Phone::new(&req.phone)?,
+            role: req.role,
+        })
+    }
 }

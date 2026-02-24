@@ -43,9 +43,23 @@ Auth, user management, and profile service.
 - `EmailVerificationTokenEntity` — token, user_id, expires_at, used_at
 - `PasswordResetTokenEntity` — token, user_id, expires_at, used_at
 
+## Value Objects (`src/users/value_objects.rs`)
+
+Input validation via parse-not-validate pattern. Raw `String` fields are validated into typed wrappers at the service boundary.
+
+| Type | Rules                                                                  |
+|------|------------------------------------------------------------------------|
+| `Email` | RFC 5322 simplified regex, max 254 chars, lowercased                   |
+| `Password` | Min 8 chars, requires upper + lower + digit + special                  |
+| `Phone` | E.164-ish: `+{cc}-{digits}`, 7-15 total digits                         |
+| `Username` | 3-30 chars, `[a-zA-Z0-9_-]`, profanity blocklist (not implemented yet) |
+
+Validated DTOs (`ValidUserCreateReq`, `ValidUserUpdateReq`) are created via `TryFrom` and passed to the repository layer.
+
 ## Key Patterns
 
 - **Passwords**: Argon2 hashing
+- **Input validation**: Value objects in service layer; repository only accepts validated types
 - **Tokens**: 32-byte random hex, 24h expiry (password reset)
 - **Caching**: Redis user cache, 5-min TTL, key `user:{uuid}`, evicted on update/delete
 - **Transactions**: All writes use `with_transaction()` from shared

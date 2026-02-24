@@ -1,6 +1,7 @@
 use crate::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq,
-    UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
+    UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, ValidUserCreateReq,
+    ValidUserUpdateReq, VerifyEmailReq,
 };
 use crate::users::repository::{
     create_password_reset_token, create_user, create_verification_token, delete_user,
@@ -8,6 +9,7 @@ use crate::users::repository::{
     get_valid_verification_token, mark_reset_token_used, mark_token_used, update_user,
     update_user_password, verify_user_email,
 };
+use crate::users::value_objects::Password;
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
@@ -62,10 +64,9 @@ impl UserService {
     }
 
     pub async fn create_user(&self, req: UserCreateReq) -> Result<(), AppError> {
-        let hashed_password = hash_password(&req.password)?;
-        let email = req.email.clone();
-        let mut user_req = req;
-        user_req.password = hashed_password;
+        let validated: ValidUserCreateReq = req.try_into()?;
+        let hashed_password = hash_password(validated.password.as_str())?;
+        let email = validated.email.as_str().to_string();
 
         let token = generate_verification_token();
         let token_clone = token.clone();
@@ -73,7 +74,7 @@ impl UserService {
 
         with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                let user_id = create_user(tx.as_executor(), user_req)
+                let user_id = create_user(tx.as_executor(), validated, &hashed_password)
                     .await
                     .map_err(|e| TxError::Other(e.to_string()))?;
 
@@ -132,9 +133,11 @@ impl UserService {
     }
 
     pub async fn update_user(&self, id: Uuid, req: UserUpdateReq) -> Result<(), AppError> {
+        let validated: ValidUserUpdateReq = req.try_into()?;
+
         with_transaction(&self.pool, |tx| {
             Box::pin(async move {
-                update_user(tx.as_executor(), id, req)
+                update_user(tx.as_executor(), id, validated)
                     .await
                     .map_err(|e| TxError::Other(e.to_string()))?;
                 Ok(())
@@ -259,7 +262,8 @@ impl UserService {
 
     pub async fn reset_password(&self, req: ResetPasswordReq) -> Result<(), AppError> {
         let token_entity = get_valid_password_reset_token(&self.pool, &req.token).await?;
-        let hashed_password = hash_password(&req.new_password)?;
+        let validated_password = Password::new(&req.new_password)?;
+        let hashed_password = hash_password(validated_password.as_str())?;
 
         let token_id = token_entity.id;
         let user_id = token_entity.user_id;
@@ -301,7 +305,8 @@ impl UserService {
             ));
         }
 
-        let hashed_password = hash_password(&req.new_password)?;
+        let validated_password = Password::new(&req.new_password)?;
+        let hashed_password = hash_password(validated_password.as_str())?;
 
         with_transaction(&self.pool, |tx| {
             let hashed = hashed_password.clone();

@@ -42,9 +42,9 @@ pub fn test_app_state(pool: PgPool) -> AppState {
 pub fn sample_create_req() -> UserCreateReq {
     UserCreateReq {
         username: "testuser".to_string(),
-        password: "password123".to_string(),
+        password: "Password1!".to_string(),
         email: "test@example.com".to_string(),
-        phone: "010-1234-5678".to_string(),
+        phone: "+82-10-1234-5678".to_string(),
         role: Role::Buyer,
     }
 }
@@ -52,9 +52,9 @@ pub fn sample_create_req() -> UserCreateReq {
 pub fn sample_create_req_2() -> UserCreateReq {
     UserCreateReq {
         username: "testuser2".to_string(),
-        password: "password456".to_string(),
+        password: "Password2!".to_string(),
         email: "test2@example.com".to_string(),
-        phone: "010-9876-5432".to_string(),
+        phone: "+82-10-9876-5432".to_string(),
         role: Role::Buyer,
     }
 }
@@ -62,9 +62,9 @@ pub fn sample_create_req_2() -> UserCreateReq {
 pub fn admin_create_req() -> UserCreateReq {
     UserCreateReq {
         username: "adminuser".to_string(),
-        password: "adminpass123".to_string(),
+        password: "AdminPass1!".to_string(),
         email: "admin@example.com".to_string(),
-        phone: "010-0000-0000".to_string(),
+        phone: "+82-10-0000-0000".to_string(),
         role: Role::Admin,
     }
 }
@@ -73,7 +73,7 @@ pub fn sample_update_req() -> UserUpdateReq {
     UserUpdateReq {
         username: "updateduser".to_string(),
         email: "updated@example.com".to_string(),
-        phone: "010-1111-2222".to_string(),
+        phone: "+82-10-1111-2222".to_string(),
         role: Role::Buyer,
     }
 }

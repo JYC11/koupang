@@ -352,7 +352,7 @@ async fn reset_password_with_valid_token_succeeds() {
     let result = service
         .reset_password(ResetPasswordReq {
             token: row.0,
-            new_password: "newpassword456".to_string(),
+            new_password: "NewPassword4!".to_string(),
         })
         .await;
     assert!(result.is_ok());
@@ -362,7 +362,7 @@ async fn reset_password_with_valid_token_succeeds() {
     let login_result = service
         .login_user(UserLoginReq {
             username,
-            password: "newpassword456".to_string(),
+            password: "NewPassword4!".to_string(),
         })
         .await;
     assert!(login_result.is_ok());
@@ -377,7 +377,7 @@ async fn reset_password_with_invalid_token_fails() {
     let result = service
         .reset_password(ResetPasswordReq {
             token: "invalid-token-does-not-exist".to_string(),
-            new_password: "newpassword456".to_string(),
+            new_password: "NewPassword4!".to_string(),
         })
         .await;
     assert!(result.is_err());
@@ -404,7 +404,7 @@ async fn change_password_with_correct_current_succeeds() {
             user.id,
             ChangePasswordReq {
                 current_password: password,
-                new_password: "newpassword456".to_string(),
+                new_password: "NewPassword4!".to_string(),
             },
         )
         .await;
@@ -415,7 +415,7 @@ async fn change_password_with_correct_current_succeeds() {
     let login_result = service
         .login_user(UserLoginReq {
             username,
-            password: "newpassword456".to_string(),
+            password: "NewPassword4!".to_string(),
         })
         .await;
     assert!(login_result.is_ok());
@@ -439,7 +439,7 @@ async fn change_password_with_wrong_current_fails() {
             user.id,
             ChangePasswordReq {
                 current_password: "wrongpassword".to_string(),
-                new_password: "newpassword456".to_string(),
+                new_password: "NewPassword4!".to_string(),
             },
         )
         .await;
@@ -649,7 +649,7 @@ async fn change_password_evicts_cache() {
             entity.id,
             ChangePasswordReq {
                 current_password: password,
-                new_password: "newpassword456".to_string(),
+                new_password: "NewPassword4!".to_string(),
             },
         )
         .await
