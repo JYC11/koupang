@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             name: "catalog",
             port_env_key: "CATALOG_PORT",
             db_url_env_key: "CATALOG_DB_URL",
-            migrations_dir: "./.migrations/catalog",
+            migrations_dir: "./migrations",
         },
         None::<NoGrpc>,
         |pool, redis_conn| {

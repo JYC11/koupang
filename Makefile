@@ -6,6 +6,16 @@ local-infra: ## Setup local infrastructure with docker compose
 local-infra-down: ## Setup local infrastructure with docker compose
 	 docker compose -f docker-compose.infra.yml down
 
+.PHONY: run
+run: ## Run a specific service locally (usage: make run SERVICE=identity)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make run SERVICE=<service-name>"; \
+		echo ""; \
+		echo "Available services: identity, catalog, order, payment, shipping, notification, review, moderation"; \
+		exit 1; \
+	fi
+	@bash util-scripts/run.sh $(SERVICE)
+
 .PHONY: test
 test: ## Run tests for a specific service or all services (usage: make test SERVICE=identity or make test SERVICE=all)
 	@if [ -z "$(SERVICE)" ]; then \

@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             name: "identity",
             port_env_key: "IDENTITY_PORT",
             db_url_env_key: "IDENTITY_DB_URL",
-            migrations_dir: "./.migrations/identity",
+            migrations_dir: "./migrations",
         },
         Some((
             GrpcConfig {
