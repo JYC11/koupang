@@ -8,7 +8,7 @@
 |---------|--------|---------------|------------|------|
 | shared | Complete | Shared libraries | — | [shared/CLAUDE.md](shared/CLAUDE.md) |
 | identity | Complete (88 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog | Complete (111 tests) | Products, Pricing, Inventory | Products, SKUs, Images, Stock | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
+| catalog | Complete (144 tests) | Products, Pricing, Inventory | Products, SKUs, Images, Stock | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
 | order | Stub | Order lifecycle (state machine) | Orders, Order Items | — |
 | payment | Stub | Payment gateway, wallets | Transactions, Invoices | — |
 | shipping | Stub | Logistics, tracking | Shipments, Carriers | — |
@@ -67,37 +67,16 @@ koupang/
 ## Key Shared Imports
 
 ```rust
-// Service bootstrap
 use shared::server::{run_service_with_infra, ServiceConfig, NoGrpc};
-use shared::health::health_routes;
-
-// Auth
-use shared::auth::jwt::{JwtService, CurrentUser, AccessTokenClaims, JwtTokens};
+use shared::auth::jwt::{JwtService, CurrentUser};
 use shared::auth::middleware::AuthMiddleware;   // ::new() or ::new_claims_based()
 use shared::auth::guards::{require_access, require_admin};
 use shared::auth::Role;                         // Buyer, Seller, Admin
-use shared::config::auth_config::AuthConfig;
-
-// Database
 use shared::db::{PgPool, PgExec, PgConnection};
-use shared::db::transaction_support::{with_transaction, with_nested_transaction, TxContext};
-use shared::db::pagination_support::{keyset_paginate, get_cursors, PaginationParams, PaginationRes, HasId};
-use shared::config::db_config::DbConfig;
-
-// HTTP responses & errors
+use shared::db::transaction_support::{with_transaction, TxContext};
 use shared::errors::AppError;                   // NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest
 use shared::responses::{ok, success, created};
-
-// Misc
-use shared::cache::{init_redis, init_optional_redis};
-use shared::dto_helpers::{fmt_id, fmt_datetime, fmt_datetime_opt};
-use shared::email::{EmailService, EmailMessage, MockEmailService};
-
-// Test utilities (behind `test-utils` feature)
-use shared::test_utils::db::TestDb;
-use shared::test_utils::redis::TestRedis;
-use shared::test_utils::http::{body_bytes, body_json};
-use shared::test_utils::grpc::start_test_grpc_server;
+use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 ```
 
 ## Patterns to Implement
@@ -113,125 +92,10 @@ use shared::test_utils::grpc::start_test_grpc_server;
 - Background jobs: https://crates.io/crates/aj
 - CQRS
 
-## New Service Bootstrap Recipe
+## Reference Docs (read on-demand, not auto-loaded)
 
-Use catalog as the reference implementation:
-
-1. **Add crate to workspace** `Cargo.toml` members list
-2. **Create `src/main.rs`** — use `run_service_with_infra()`:
-   ```rust
-   use <service>::AppState;
-   use <service>::app;
-   use shared::health::health_routes;
-   use shared::server::{NoGrpc, ServiceConfig, run_service_with_infra};
-
-   #[tokio::main]
-   async fn main() -> Result<(), Box<dyn Error>> {
-       run_service_with_infra(
-           ServiceConfig {
-               name: "<service>",
-               port_env_key: "<SERVICE>_PORT",
-               db_url_env_key: "<SERVICE>_DB_URL",
-               migrations_dir: "./.migrations/<service>",
-           },
-           None::<NoGrpc>,  // or Some((GrpcConfig { .. }, grpc_router)) for gRPC
-           |pool, redis_conn| {
-               let app_state = AppState::new(pool, redis_conn);
-               app(app_state).merge(health_routes("<service>"))
-           },
-       ).await
-   }
-   ```
-3. **Create `src/lib.rs`** — define `AppState` (wraps `Arc<Service>` + `Arc<JwtService>`) and `app()` fn
-4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `domain.rs`, `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`
-5. **Create first migration**: `make migration SERVICE=<name> NAME=init`
-6. **Auth**: use `AuthMiddleware::new_claims_based(jwt_service)` for non-identity services (ADR-008)
-7. **Tests**: create `tests/integration.rs`, `tests/common/mod.rs` (with `test_db()`, `test_app_state()`, sample fixtures), and per-module test files
-8. **Add CLAUDE.md** in the service directory
-9. **Add env vars** to `docker-compose.yml`
-
-## Common Code Patterns
-
-### Adding an endpoint (route → service → domain → repository)
-
-```rust
-// routes.rs — HTTP handler, extracts state + auth + body
-async fn create_thing(
-    State(state): State<AppState>,
-    current_user: CurrentUser,
-    Json(body): Json<CreateThingReq>,
-) -> Result<impl IntoResponse, AppError> {
-    let thing = state.service.create_thing(&current_user, body).await?;
-    Ok(created("Thing created"))
-}
-
-// service.rs — orchestration only (no business logic)
-pub async fn create_thing(&self, user: &CurrentUser, req: CreateThingReq) -> Result<ThingDto, AppError> {
-    let vo_validated = ValidCreateThingReq::try_from(req)?;         // Step 1: VO validation (dtos.rs)
-    let validated = ValidatedCreateThing::new(&self.pool, vo_validated).await?;  // Step 2: domain validation (dtos.rs)
-    let entity = with_transaction(&self.pool, |tx| async move {
-        repository::create_thing(tx.as_executor(), &validated, user.id).await
-    }).await?;
-    Ok(ThingDto::from(entity))
-}
-
-// domain.rs — rich domain model objects (all fields are value objects)
-pub struct Thing {
-    pub id: Uuid,
-    pub name: ThingName,       // not String — value object with invariants
-    pub price: Price,          // not Decimal — value object enforcing >= 0
-    pub category_id: Option<Uuid>,  // future: Option<Category> for traversal
-}
-impl TryFrom<ThingEntity> for Thing { /* lift raw DB row into rich domain model */ }
-
-// repository.rs — pure SQL, takes PgConnection for writes, PgExec for reads
-pub async fn create_thing(conn: &mut PgConnection, req: &ValidatedCreateThing, user_id: Uuid) -> Result<ThingEntity, AppError> {
-    sqlx::query_as!(ThingEntity, "INSERT INTO things ...")
-        .fetch_one(conn).await
-        .map_err(|e| AppError::InternalServerError(e.to_string()))
-}
-```
-
-### Domain layer pattern
-
-Each module has a `domain.rs` with rich domain model objects:
-
-```
-entities.rs   → Raw DB rows (String, Decimal, Uuid) — used by sqlx FromRow
-domain.rs     → Rich domain objects (ProductName, Price, Currency) — business logic lives here
-dtos.rs       → Request/response DTOs + validated request types (VO validation + FK validation)
-value_objects.rs → Newtype wrappers enforcing invariants (non-empty, range, format)
-```
-
-- **Entity → Domain**: `TryFrom<Entity>` lifts primitives into value objects
-- **Domain objects** carry all invariants via the type system; business rules are methods on these types
-- **FK references** are currently `Option<Uuid>` — will evolve to embedded domain objects for traversable graphs
-- **Validated request types** (e.g. `ValidatedCreateProduct`) enforce FK existence + cross-entity rules before reaching the repository
-
-### Writing an integration test
-
-```rust
-// tests/common/mod.rs
-pub async fn test_db() -> TestDb {
-    TestDb::start("./migrations").await
-}
-pub fn test_app_state(pool: PgPool) -> AppState {
-    AppState::new_with_jwt(pool, test_auth_config())
-}
-pub fn seller_user() -> CurrentUser {
-    CurrentUser { id: Uuid::new_v4(), role: Role::Seller }
-}
-
-// tests/<module>/<layer>_test.rs
-#[tokio::test]
-async fn test_create_thing() {
-    let db = test_db().await;
-    let service = test_catalog_service(db.pool.clone());
-    let user = seller_user();
-    let result = service.create_thing(&user, sample_req()).await;
-    assert!(result.is_ok());
-}
-```
+- **[Bootstrap recipe](.plan/bootstrap-recipe.md)** — step-by-step for creating a new service
+- **[Code patterns](.plan/patterns.md)** — endpoint, domain layer, and test patterns
 
 ## Scripts
 

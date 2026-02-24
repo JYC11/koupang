@@ -1,14 +1,14 @@
 use axum::{
-    Json, Router,
-    extract::{Path, State},
-    response::IntoResponse,
+    extract::{Path, State}, response::IntoResponse,
     routing::{delete, get, post, put},
+    Json,
+    Router,
 };
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::brands::dtos::{AssociateCategoryReq, BrandRes, CreateBrandReq, UpdateBrandReq};
 use crate::categories::dtos::CategoryRes;
+use crate::AppState;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;

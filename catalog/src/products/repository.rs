@@ -104,13 +104,13 @@ pub async fn is_brand_in_category<'e>(
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS(SELECT 1 FROM brand_categories WHERE brand_id = $1 AND category_id = $2)",
     )
-    .bind(brand_id)
-    .bind(category_id)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| {
-        AppError::InternalServerError(format!("Failed to check brand-category association: {}", e))
-    })?;
+        .bind(brand_id)
+        .bind(category_id)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to check brand-category association: {}", e))
+        })?;
     Ok(row.0)
 }
 
@@ -126,17 +126,17 @@ pub async fn create_product(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id",
     )
-    .bind(seller_id)
-    .bind(req.name.as_str())
-    .bind(req.slug.as_str())
-    .bind(&req.description)
-    .bind(req.base_price.value())
-    .bind(req.currency.as_str())
-    .bind(&req.category_id)
-    .bind(&req.brand_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to create product: {}", e)))?;
+        .bind(seller_id)
+        .bind(req.name.as_str())
+        .bind(req.slug.as_str())
+        .bind(&req.description)
+        .bind(req.base_price.value())
+        .bind(req.currency.as_str())
+        .bind(&req.category_id)
+        .bind(&req.brand_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create product: {}", e)))?;
 
     Ok(row.0)
 }
@@ -268,10 +268,10 @@ pub async fn list_skus_by_product<'e>(
     sqlx::query_as::<_, SkuEntity>(
         "SELECT * FROM skus WHERE product_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC",
     )
-    .bind(product_id)
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to list SKUs: {}", e)))
+        .bind(product_id)
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to list SKUs: {}", e)))
 }
 
 pub async fn create_sku(
@@ -284,14 +284,14 @@ pub async fn create_sku(
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id",
     )
-    .bind(product_id)
-    .bind(req.sku_code.as_str())
-    .bind(req.price.value())
-    .bind(req.stock_quantity.value())
-    .bind(&req.attributes)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
+        .bind(product_id)
+        .bind(req.sku_code.as_str())
+        .bind(req.price.value())
+        .bind(req.stock_quantity.value())
+        .bind(&req.attributes)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
 
     Ok(row.0)
 }
@@ -382,11 +382,11 @@ pub async fn adjust_stock(tx: &mut PgConnection, sku_id: Uuid, delta: i32) -> Re
         "UPDATE skus SET stock_quantity = stock_quantity + $1, updated_at = NOW()
          WHERE id = $2 AND deleted_at IS NULL AND stock_quantity + $1 >= 0",
     )
-    .bind(delta)
-    .bind(sku_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
+        .bind(delta)
+        .bind(sku_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::BadRequest(
@@ -406,10 +406,10 @@ pub async fn list_images_by_product<'e>(
     sqlx::query_as::<_, ProductImageEntity>(
         "SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC",
     )
-    .bind(product_id)
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to list images: {}", e)))
+        .bind(product_id)
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to list images: {}", e)))
 }
 
 pub async fn add_product_image(
@@ -431,14 +431,14 @@ pub async fn add_product_image(
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id",
     )
-    .bind(product_id)
-    .bind(req.url.as_str())
-    .bind(&req.alt_text)
-    .bind(req.sort_order)
-    .bind(req.is_primary)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
+        .bind(product_id)
+        .bind(req.url.as_str())
+        .bind(&req.alt_text)
+        .bind(req.sort_order)
+        .bind(req.is_primary)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
 
     Ok(row.0)
 }

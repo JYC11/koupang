@@ -1,9 +1,11 @@
-use catalog::AppState;
+use catalog::brands::service::BrandService;
+use catalog::categories::service::CategoryService;
 use catalog::products::dtos::{AddProductImageReq, CreateProductReq, CreateSkuReq};
 use catalog::products::service::CatalogService;
+use catalog::AppState;
 use rust_decimal::Decimal;
-use shared::auth::Role;
 use shared::auth::jwt::CurrentUser;
+use shared::auth::Role;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::test_utils::db::TestDb;
@@ -24,6 +26,14 @@ pub fn test_auth_config() -> AuthConfig {
 
 pub fn test_catalog_service(pool: PgPool) -> CatalogService {
     CatalogService::new(pool)
+}
+
+pub fn test_category_service(pool: PgPool) -> CategoryService {
+    CategoryService::new(pool)
+}
+
+pub fn test_brand_service(pool: PgPool) -> BrandService {
+    BrandService::new(pool)
 }
 
 pub fn test_app_state(pool: PgPool) -> AppState {
@@ -106,12 +116,40 @@ pub async fn create_test_category_named(pool: &PgPool, name: &str) -> Uuid {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO categories (name, slug, path, depth) VALUES ($1, $2, $3::ltree, 0) RETURNING id",
     )
-    .bind(name)
-    .bind(&slug)
-    .bind(&path_label)
-    .fetch_one(pool)
-    .await
-    .expect("Failed to create test category");
+        .bind(name)
+        .bind(&slug)
+        .bind(&path_label)
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create test category");
+    row.0
+}
+
+pub async fn create_test_child_category(pool: &PgPool, parent_id: Uuid, name: &str) -> Uuid {
+    let slug = name.to_lowercase().replace(' ', "-");
+    let path_label = slug.replace('-', "_");
+
+    let parent: (String, i32) =
+        sqlx::query_as("SELECT path::text, depth FROM categories WHERE id = $1")
+            .bind(parent_id)
+            .fetch_one(pool)
+            .await
+            .expect("Failed to get parent category");
+
+    let path = format!("{}.{}", parent.0, path_label);
+    let depth = parent.1 + 1;
+
+    let row: (Uuid,) = sqlx::query_as(
+        "INSERT INTO categories (name, slug, path, parent_id, depth) VALUES ($1, $2, $3::ltree, $4, $5) RETURNING id",
+    )
+        .bind(name)
+        .bind(&slug)
+        .bind(&path)
+        .bind(parent_id)
+        .bind(depth)
+        .fetch_one(pool)
+        .await
+        .expect("Failed to create child category");
     row.0
 }
 

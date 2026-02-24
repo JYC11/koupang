@@ -13,10 +13,10 @@ pub async fn get_category_by_id<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE id = $1",
     )
-    .bind(id)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| AppError::NotFound(format!("Category not found: {}", e)))
+        .bind(id)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::NotFound(format!("Category not found: {}", e)))
 }
 
 pub async fn get_category_by_slug<'e>(
@@ -27,10 +27,10 @@ pub async fn get_category_by_slug<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE slug = $1",
     )
-    .bind(slug)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| AppError::NotFound(format!("Category not found: {}", e)))
+        .bind(slug)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::NotFound(format!("Category not found: {}", e)))
 }
 
 pub async fn list_root_categories<'e>(
@@ -40,9 +40,9 @@ pub async fn list_root_categories<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE parent_id IS NULL ORDER BY name ASC",
     )
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to list root categories: {}", e)))
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to list root categories: {}", e)))
 }
 
 pub async fn get_children<'e>(
@@ -53,10 +53,10 @@ pub async fn get_children<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE parent_id = $1 ORDER BY name ASC",
     )
-    .bind(parent_id)
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to list children: {}", e)))
+        .bind(parent_id)
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to list children: {}", e)))
 }
 
 /// Get all descendants of a category (including itself) using ltree <@ operator.
@@ -68,10 +68,10 @@ pub async fn get_subtree<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE path <@ $1::ltree ORDER BY path ASC",
     )
-    .bind(path)
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to get subtree: {}", e)))
+        .bind(path)
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to get subtree: {}", e)))
 }
 
 /// Get all ancestors of a category (including itself) using ltree @> operator.
@@ -83,10 +83,10 @@ pub async fn get_ancestors<'e>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE path @> $1::ltree ORDER BY depth ASC",
     )
-    .bind(path)
-    .fetch_all(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to get ancestors: {}", e)))
+        .bind(path)
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to get ancestors: {}", e)))
 }
 
 pub async fn create_category(
@@ -100,15 +100,15 @@ pub async fn create_category(
          VALUES ($1, $2, $3::ltree, $4, $5, $6)
          RETURNING id",
     )
-    .bind(req.name.as_str())
-    .bind(req.slug.as_str())
-    .bind(path)
-    .bind(&req.parent_id)
-    .bind(depth)
-    .bind(&req.description)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
+        .bind(req.name.as_str())
+        .bind(req.slug.as_str())
+        .bind(path)
+        .bind(&req.parent_id)
+        .bind(depth)
+        .bind(&req.description)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
 
     Ok(row.0)
 }
@@ -193,10 +193,10 @@ pub async fn has_products<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<boo
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM products WHERE category_id = $1 AND deleted_at IS NULL",
     )
-    .bind(id)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
+        .bind(id)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
 
     Ok(row.0 > 0)
 }

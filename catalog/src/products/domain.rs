@@ -1,10 +1,7 @@
-use crate::products::dtos::{ValidCreateProductReq, ValidUpdateProductReq};
 use crate::products::entities::{ProductEntity, SkuEntity};
-use crate::products::repository;
 use crate::products::value_objects::{
     Currency, Price, ProductName, ProductStatus, SkuCode, Slug, StockQuantity,
 };
-use shared::db::PgPool;
 use shared::errors::AppError;
 use uuid::Uuid;
 

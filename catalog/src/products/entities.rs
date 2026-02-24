@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
-use sqlx::FromRow;
-use sqlx::types::Uuid;
 use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::types::Uuid;
+use sqlx::FromRow;
 
 use super::value_objects::{ProductStatus, SkuStatus};
 

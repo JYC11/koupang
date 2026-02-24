@@ -2,7 +2,7 @@ use crate::common::{
     associate_brand_category, create_test_brand, create_test_category, sample_add_image_req,
     sample_create_product_req, sample_create_product_with_fks, sample_create_sku_req, test_db,
 };
-use catalog::products::domain::ValidatedCreateProduct;
+use catalog::products::dtos::ValidatedCreateProduct;
 use catalog::products::dtos::{ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq};
 use catalog::products::repository;
 use uuid::Uuid;

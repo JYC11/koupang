@@ -79,34 +79,36 @@ catalog/
 
 Rich types where every field is a value object. Business logic goes here.
 
-| Domain Type | Fields (value objects) | Constructed via |
-|-------------|----------------------|-----------------|
-| `Product` | `ProductName`, `Slug`, `Price`, `Currency`, `ProductStatus` + FK UUIDs | `TryFrom<ProductEntity>` |
-| `Sku` | `SkuCode`, `Price`, `StockQuantity` + product_id UUID | `TryFrom<(Uuid, SkuEntity)>` |
-| `Brand` | `BrandName`, `Slug`, `HttpUrl` (logo) | `TryFrom<BrandEntity>` |
-| `Category` | `CategoryName`, `Slug`, `LtreeLabel` + parent/depth | `TryFrom<CategoryEntity>` |
+| Domain Type | Fields (value objects)                                                 | Constructed via              |
+|-------------|------------------------------------------------------------------------|------------------------------|
+| `Product`   | `ProductName`, `Slug`, `Price`, `Currency`, `ProductStatus` + FK UUIDs | `TryFrom<ProductEntity>`     |
+| `Sku`       | `SkuCode`, `Price`, `StockQuantity` + product_id UUID                  | `TryFrom<(Uuid, SkuEntity)>` |
+| `Brand`     | `BrandName`, `Slug`, `HttpUrl` (logo)                                  | `TryFrom<BrandEntity>`       |
+| `Category`  | `CategoryName`, `Slug`, `LtreeLabel` + parent/depth                    | `TryFrom<CategoryEntity>`    |
 
 FK references are currently `Option<Uuid>` — planned evolution to embedded domain objects for traversable graphs.
 
 ## Entities (raw DB rows)
 
-- `ProductEntity` — id, seller_id, name, slug (unique), description, base_price (Decimal), currency, category_id (FK), brand_id (FK), status, soft-delete + joined fields: category_name, category_slug, brand_name, brand_slug
-- `SkuEntity` — id, product_id, sku_code (unique), price (Decimal), stock_quantity, attributes (JSONB), status, soft-delete
+- `ProductEntity` — id, seller_id, name, slug (unique), description, base_price (Decimal), currency, category_id (FK),
+  brand_id (FK), status, soft-delete + joined fields: category_name, category_slug, brand_name, brand_slug
+- `SkuEntity` — id, product_id, sku_code (unique), price (Decimal), stock_quantity, attributes (JSONB), status,
+  soft-delete
 - `ProductImageEntity` — id, product_id, url, alt_text, sort_order, is_primary (no soft-delete)
 
 ## Value Objects (`src/products/value_objects.rs`)
 
-| Type | Rules |
-|------|-------|
-| `ProductName` | Non-empty, max 500 chars, trimmed |
-| `Slug` | Lowercase alphanumeric with hyphens; auto-generated from name |
-| `Price` | Decimal >= 0 |
-| `SkuCode` | 2-100 chars, alphanumeric with hyphens/underscores |
-| `StockQuantity` | i32 >= 0 |
-| `Currency` | 3-letter ISO 4217 (e.g. USD, KRW), uppercased |
-| `ImageUrl` | Must start with http:// or https://, max 2048 chars |
-| `ProductStatus` | Draft, Active, Inactive, Archived |
-| `SkuStatus` | Active, Inactive, OutOfStock |
+| Type            | Rules                                                         |
+|-----------------|---------------------------------------------------------------|
+| `ProductName`   | Non-empty, max 500 chars, trimmed                             |
+| `Slug`          | Lowercase alphanumeric with hyphens; auto-generated from name |
+| `Price`         | Decimal >= 0                                                  |
+| `SkuCode`       | 2-100 chars, alphanumeric with hyphens/underscores            |
+| `StockQuantity` | i32 >= 0                                                      |
+| `Currency`      | 3-letter ISO 4217 (e.g. USD, KRW), uppercased                 |
+| `ImageUrl`      | Must start with http:// or https://, max 2048 chars           |
+| `ProductStatus` | Draft, Active, Inactive, Archived                             |
+| `SkuStatus`     | Active, Inactive, OutOfStock                                  |
 
 ## Key Patterns
 
@@ -122,12 +124,12 @@ FK references are currently `Option<Uuid>` — planned evolution to embedded dom
 
 ## Env Vars
 
-| Var | Purpose |
-|-----|---------|
-| `CATALOG_DB_URL` | Postgres connection string |
-| `CATALOG_PORT` | HTTP port (default 3000) |
-| `REDIS_URL` | Redis connection (optional, for future caching) |
-| `ACCESS_TOKEN_SECRET` | JWT access token signing key |
+| Var                   | Purpose                                         |
+|-----------------------|-------------------------------------------------|
+| `CATALOG_DB_URL`      | Postgres connection string                      |
+| `CATALOG_PORT`        | HTTP port (default 3000)                        |
+| `REDIS_URL`           | Redis connection (optional, for future caching) |
+| `ACCESS_TOKEN_SECRET` | JWT access token signing key                    |
 
 ## Migrations
 
@@ -136,6 +138,7 @@ Located at `migrations/`, referenced as `./.migrations/catalog` at runtime.
 ## Tests
 
 58 unit tests (value objects) + 53 integration tests (repository + service + router). Run with:
+
 ```
 make test SERVICE=catalog
 ```

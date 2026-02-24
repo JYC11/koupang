@@ -5,8 +5,8 @@ use crate::categories::dtos::{
 use crate::categories::repository;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
+use shared::db::transaction_support::{with_transaction, TxError};
 use shared::db::PgPool;
-use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -47,8 +47,8 @@ impl CategoryService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
+            .await
+            .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
 
         let category = repository::get_category_by_id(&self.pool, category_id).await?;
         Ok(CategoryRes::new(category))
@@ -108,8 +108,8 @@ impl CategoryService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to update category: {}", e)))?;
+            .await
+            .map_err(|e| AppError::InternalServerError(format!("Failed to update category: {}", e)))?;
 
         Ok(())
     }
@@ -146,8 +146,8 @@ impl CategoryService {
                     .map_err(|e| TxError::Other(e.to_string()))
             })
         })
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to delete category: {}", e)))?;
+            .await
+            .map_err(|e| AppError::InternalServerError(format!("Failed to delete category: {}", e)))?;
 
         Ok(())
     }
