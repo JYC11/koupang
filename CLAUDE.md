@@ -86,6 +86,13 @@
   - `make adr` — create a new ADR file (auto-increments number)
   - `make local-infra` / `make local-infra-down` — start/stop local Docker infra
 
+## Prompt logging
+
+- At the END of every session, log all user prompts from this session to the memory folder under `llm_usage_logging_folder/`
+- Format: append to a file named by date (e.g. `session-log-2026-02-25.md`)
+- Each entry should include: session start time, numbered user prompts (just the raw text, no system messages), and a 1-line summary of what was accomplished
+- This is for blogging purposes — the logs will be used in blog posts about LLM usage
+
 ## Task management
 
 - beads_rust: https://github.com/Dicklesworthstone/beads_rust
