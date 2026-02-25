@@ -7,8 +7,8 @@
 | Service | Status | Responsibility | Data Owned | Docs |
 |---------|--------|---------------|------------|------|
 | shared | Complete | Shared libraries | — | [shared/CLAUDE.md](shared/CLAUDE.md) |
-| identity | Complete (88 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog | Complete (144 tests) | Products, Pricing, Inventory | Products, SKUs, Images, Stock | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
+| identity | Complete (115 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
+| catalog | Complete (202 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
 | order | Stub | Order lifecycle (state machine) | Orders, Order Items | — |
 | payment | Stub | Payment gateway, wallets | Transactions, Invoices | — |
 | shipping | Stub | Logistics, tracking | Shipments, Carriers | — |
@@ -55,6 +55,7 @@ koupang/
 | 006 | Email trait with mock | Decoupled from provider, `MockEmailService` for dev |
 | 007 | rust_decimal for money | `Decimal` in Rust, `NUMERIC(19,4)` in Postgres |
 | 008 | Claims-based auth downstream | Non-identity services skip user DB lookup |
+| 009 | Postgres ltree for categories | Materialized path hierarchy, `<@`/`@>` tree queries |
 
 ## Tech Stack
 
