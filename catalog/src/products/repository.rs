@@ -166,6 +166,32 @@ pub async fn is_brand_in_category<'e>(
     Ok(row.0)
 }
 
+/// Core FK validation: existence checks + brand-category association.
+pub async fn validate_fk_references(
+    pool: &PgPool,
+    category_id: Option<CategoryId>,
+    brand_id: Option<BrandId>,
+) -> Result<(), AppError> {
+    if let Some(cat_id) = category_id {
+        if !category_exists(pool, cat_id).await? {
+            return Err(AppError::BadRequest("Category does not exist".to_string()));
+        }
+    }
+    if let Some(br_id) = brand_id {
+        if !brand_exists(pool, br_id).await? {
+            return Err(AppError::BadRequest("Brand does not exist".to_string()));
+        }
+    }
+    if let (Some(cat_id), Some(br_id)) = (category_id, brand_id) {
+        if !is_brand_in_category(pool, br_id, cat_id).await? {
+            return Err(AppError::BadRequest(
+                "Brand is not associated with the specified category".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ── Product mutations ───────────────────────────────────────
 
 pub async fn create_product(
@@ -519,28 +545,4 @@ pub async fn delete_product_image(
     Ok(())
 }
 
-/// Core FK validation: existence checks + brand-category association.
-pub async fn validate_fk_references(
-    pool: &PgPool,
-    category_id: Option<CategoryId>,
-    brand_id: Option<BrandId>,
-) -> Result<(), AppError> {
-    if let Some(cat_id) = category_id {
-        if !repository::category_exists(pool, cat_id).await? {
-            return Err(AppError::BadRequest("Category does not exist".to_string()));
-        }
-    }
-    if let Some(br_id) = brand_id {
-        if !repository::brand_exists(pool, br_id).await? {
-            return Err(AppError::BadRequest("Brand does not exist".to_string()));
-        }
-    }
-    if let (Some(cat_id), Some(br_id)) = (category_id, brand_id) {
-        if !repository::is_brand_in_category(pool, br_id, cat_id).await? {
-            return Err(AppError::BadRequest(
-                "Brand is not associated with the specified category".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
+
