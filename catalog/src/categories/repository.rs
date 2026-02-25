@@ -1,19 +1,19 @@
 use crate::categories::dtos::{ValidCreateCategoryReq, ValidUpdateCategoryReq};
 use crate::categories::entities::CategoryEntity;
+use crate::categories::value_objects::CategoryId;
 use shared::db::PgExec;
 use shared::errors::AppError;
 use sqlx::PgConnection;
-use uuid::Uuid;
 
 pub async fn get_category_by_id<'e>(
     executor: impl PgExec<'e>,
-    id: Uuid,
+    id: CategoryId,
 ) -> Result<CategoryEntity, AppError> {
     sqlx::query_as::<_, CategoryEntity>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE id = $1",
     )
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("Category not found: {}", e)))
@@ -47,13 +47,13 @@ pub async fn list_root_categories<'e>(
 
 pub async fn get_children<'e>(
     executor: impl PgExec<'e>,
-    parent_id: Uuid,
+    parent_id: CategoryId,
 ) -> Result<Vec<CategoryEntity>, AppError> {
     sqlx::query_as::<_, CategoryEntity>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
          FROM categories WHERE parent_id = $1 ORDER BY name ASC",
     )
-        .bind(parent_id)
+        .bind(parent_id.value())
         .fetch_all(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to list children: {}", e)))
@@ -94,8 +94,8 @@ pub async fn create_category(
     req: ValidCreateCategoryReq,
     path: &str,
     depth: i32,
-) -> Result<Uuid, AppError> {
-    let row: (Uuid,) = sqlx::query_as(
+) -> Result<CategoryId, AppError> {
+    let row: (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO categories (name, slug, path, parent_id, depth, description)
          VALUES ($1, $2, $3::ltree, $4, $5, $6)
          RETURNING id",
@@ -103,19 +103,19 @@ pub async fn create_category(
     .bind(req.name.as_str())
     .bind(req.slug.as_str())
     .bind(path)
-    .bind(&req.parent_id)
+    .bind(req.parent_id.map(|id| id.value()))
     .bind(depth)
     .bind(&req.description)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to create category: {}", e)))?;
 
-    Ok(row.0)
+    Ok(CategoryId::new(row.0))
 }
 
 pub async fn update_category(
     tx: &mut PgConnection,
-    id: Uuid,
+    id: CategoryId,
     req: ValidUpdateCategoryReq,
 ) -> Result<(), AppError> {
     let mut set_parts: Vec<String> = Vec::new();
@@ -142,7 +142,7 @@ pub async fn update_category(
         set_parts.join(", ")
     );
 
-    let mut query = sqlx::query(&sql).bind(id);
+    let mut query = sqlx::query(&sql).bind(id.value());
 
     if let Some(ref name) = req.name {
         query = query.bind(name.as_str());
@@ -163,9 +163,9 @@ pub async fn update_category(
     Ok(())
 }
 
-pub async fn delete_category(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_category(tx: &mut PgConnection, id: CategoryId) -> Result<(), AppError> {
     let result = sqlx::query("DELETE FROM categories WHERE id = $1")
-        .bind(id)
+        .bind(id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete category: {}", e)))?;
@@ -178,9 +178,9 @@ pub async fn delete_category(tx: &mut PgConnection, id: Uuid) -> Result<(), AppE
 }
 
 /// Check if a category has child categories.
-pub async fn has_children<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<bool, AppError> {
+pub async fn has_children<'e>(executor: impl PgExec<'e>, id: CategoryId) -> Result<bool, AppError> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM categories WHERE parent_id = $1")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to check children: {}", e)))?;
@@ -189,11 +189,11 @@ pub async fn has_children<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<boo
 }
 
 /// Check if any products reference this category.
-pub async fn has_products<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<bool, AppError> {
+pub async fn has_products<'e>(executor: impl PgExec<'e>, id: CategoryId) -> Result<bool, AppError> {
     let row: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM products WHERE category_id = $1 AND deleted_at IS NULL",
     )
-    .bind(id)
+    .bind(id.value())
     .fetch_one(executor)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;

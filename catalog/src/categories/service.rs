@@ -3,12 +3,12 @@ use crate::categories::dtos::{
     ValidUpdateCategoryReq,
 };
 use crate::categories::repository;
+use crate::categories::value_objects::CategoryId;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
 use shared::db::PgPool;
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
-use uuid::Uuid;
 
 pub struct CategoryService {
     pool: PgPool,
@@ -54,7 +54,7 @@ impl CategoryService {
         Ok(CategoryRes::new(category))
     }
 
-    pub async fn get_category(&self, id: Uuid) -> Result<CategoryRes, AppError> {
+    pub async fn get_category(&self, id: CategoryId) -> Result<CategoryRes, AppError> {
         let category = repository::get_category_by_id(&self.pool, id).await?;
         Ok(CategoryRes::new(category))
     }
@@ -69,20 +69,20 @@ impl CategoryService {
         Ok(categories.into_iter().map(CategoryRes::new).collect())
     }
 
-    pub async fn get_children(&self, id: Uuid) -> Result<Vec<CategoryRes>, AppError> {
+    pub async fn get_children(&self, id: CategoryId) -> Result<Vec<CategoryRes>, AppError> {
         // Verify parent exists
         repository::get_category_by_id(&self.pool, id).await?;
         let children = repository::get_children(&self.pool, id).await?;
         Ok(children.into_iter().map(CategoryRes::new).collect())
     }
 
-    pub async fn get_subtree(&self, id: Uuid) -> Result<Vec<CategoryRes>, AppError> {
+    pub async fn get_subtree(&self, id: CategoryId) -> Result<Vec<CategoryRes>, AppError> {
         let category = repository::get_category_by_id(&self.pool, id).await?;
         let subtree = repository::get_subtree(&self.pool, &category.path).await?;
         Ok(subtree.into_iter().map(CategoryRes::new).collect())
     }
 
-    pub async fn get_ancestors(&self, id: Uuid) -> Result<Vec<CategoryRes>, AppError> {
+    pub async fn get_ancestors(&self, id: CategoryId) -> Result<Vec<CategoryRes>, AppError> {
         let category = repository::get_category_by_id(&self.pool, id).await?;
         let ancestors = repository::get_ancestors(&self.pool, &category.path).await?;
         Ok(ancestors.into_iter().map(CategoryRes::new).collect())
@@ -91,7 +91,7 @@ impl CategoryService {
     pub async fn update_category(
         &self,
         current_user: &CurrentUser,
-        id: Uuid,
+        id: CategoryId,
         req: UpdateCategoryReq,
     ) -> Result<(), AppError> {
         require_admin(current_user)?;
@@ -117,7 +117,7 @@ impl CategoryService {
     pub async fn delete_category(
         &self,
         current_user: &CurrentUser,
-        id: Uuid,
+        id: CategoryId,
     ) -> Result<(), AppError> {
         require_admin(current_user)?;
 

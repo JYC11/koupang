@@ -1,4 +1,5 @@
 use crate::users::repository::get_user_by_id;
+use crate::users::value_objects::UserId;
 use shared::db::PgPool;
 use shared::grpc::identity::identity_service_server::IdentityService;
 use shared::grpc::identity::{GetUserRequest, GetUserResponse};
@@ -23,7 +24,8 @@ impl IdentityService for IdentityGrpcService {
         request: Request<GetUserRequest>,
     ) -> Result<Response<GetUserResponse>, Status> {
         let user_id = Uuid::parse_str(&request.into_inner().user_id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid UUID: {}", e)))?;
+            .map_err(|e| Status::invalid_argument(format!("Invalid UUID: {}", e)))
+            .map(|x| UserId::new(x))?;
 
         let user = get_user_by_id(&self.pool, user_id)
             .await

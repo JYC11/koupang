@@ -17,7 +17,9 @@ static SKU_CODE_RE: Lazy<Regex> =
 
 // ── ProductName (via macro) ───────────────────────────────
 
-crate::validated_name!(ProductName, "Product name", 500);
+shared::validated_name!(ProductName, "Product name", 500);
+shared::valid_id!(ProductId);
+shared::valid_id!(SkuId);
 
 // ── Price ───────────────────────────────────────────────────
 

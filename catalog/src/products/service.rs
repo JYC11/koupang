@@ -4,6 +4,7 @@ use crate::products::dtos::{
     ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq, ValidUpdateSkuReq,
 };
 use crate::products::repository;
+use crate::products::value_objects::{ProductId, SkuId};
 use shared::auth::guards::require_access;
 use shared::auth::jwt::CurrentUser;
 use shared::db::PgPool;
@@ -44,7 +45,7 @@ impl CatalogService {
         Ok(ProductRes::new(product))
     }
 
-    pub async fn get_product(&self, id: Uuid) -> Result<ProductRes, AppError> {
+    pub async fn get_product(&self, id: ProductId) -> Result<ProductRes, AppError> {
         let product = repository::get_product_by_id(&self.pool, id).await?;
         Ok(ProductRes::new(product))
     }
@@ -54,7 +55,7 @@ impl CatalogService {
         Ok(ProductRes::new(product))
     }
 
-    pub async fn get_product_detail(&self, id: Uuid) -> Result<ProductDetailRes, AppError> {
+    pub async fn get_product_detail(&self, id: ProductId) -> Result<ProductDetailRes, AppError> {
         let product = repository::get_product_by_id(&self.pool, id).await?;
         let skus = repository::list_skus_by_product(&self.pool, id).await?;
         let images = repository::list_images_by_product(&self.pool, id).await?;
@@ -82,7 +83,7 @@ impl CatalogService {
     pub async fn update_product(
         &self,
         current_user: &CurrentUser,
-        product_id: Uuid,
+        product_id: ProductId,
         req: UpdateProductReq,
     ) -> Result<(), AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
@@ -106,7 +107,7 @@ impl CatalogService {
     pub async fn delete_product(
         &self,
         current_user: &CurrentUser,
-        product_id: Uuid,
+        product_id: ProductId,
     ) -> Result<(), AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
         require_access(current_user, &product.seller_id)?;
@@ -129,7 +130,7 @@ impl CatalogService {
     pub async fn create_sku(
         &self,
         current_user: &CurrentUser,
-        product_id: Uuid,
+        product_id: ProductId,
         req: CreateSkuReq,
     ) -> Result<SkuRes, AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
@@ -151,7 +152,7 @@ impl CatalogService {
         Ok(SkuRes::new(sku))
     }
 
-    pub async fn list_skus(&self, product_id: Uuid) -> Result<Vec<SkuRes>, AppError> {
+    pub async fn list_skus(&self, product_id: ProductId) -> Result<Vec<SkuRes>, AppError> {
         let skus = repository::list_skus_by_product(&self.pool, product_id).await?;
         Ok(skus.into_iter().map(SkuRes::new).collect())
     }
@@ -159,11 +160,12 @@ impl CatalogService {
     pub async fn update_sku(
         &self,
         current_user: &CurrentUser,
-        sku_id: Uuid,
+        sku_id: SkuId,
         req: UpdateSkuReq,
     ) -> Result<(), AppError> {
         let sku = repository::get_sku_by_id(&self.pool, sku_id).await?;
-        let product = repository::get_product_by_id(&self.pool, sku.product_id).await?;
+        let product =
+            repository::get_product_by_id(&self.pool, ProductId::new(sku.product_id)).await?;
         require_access(current_user, &product.seller_id)?;
 
         let validated: ValidUpdateSkuReq = req.try_into()?;
@@ -184,10 +186,11 @@ impl CatalogService {
     pub async fn delete_sku(
         &self,
         current_user: &CurrentUser,
-        sku_id: Uuid,
+        sku_id: SkuId,
     ) -> Result<(), AppError> {
         let sku = repository::get_sku_by_id(&self.pool, sku_id).await?;
-        let product = repository::get_product_by_id(&self.pool, sku.product_id).await?;
+        let product =
+            repository::get_product_by_id(&self.pool, ProductId::new(sku.product_id)).await?;
         require_access(current_user, &product.seller_id)?;
 
         with_transaction(&self.pool, |tx| {
@@ -206,11 +209,12 @@ impl CatalogService {
     pub async fn adjust_stock(
         &self,
         current_user: &CurrentUser,
-        sku_id: Uuid,
+        sku_id: SkuId,
         delta: i32,
     ) -> Result<(), AppError> {
         let sku = repository::get_sku_by_id(&self.pool, sku_id).await?;
-        let product = repository::get_product_by_id(&self.pool, sku.product_id).await?;
+        let product =
+            repository::get_product_by_id(&self.pool, ProductId::new(sku.product_id)).await?;
         require_access(current_user, &product.seller_id)?;
 
         with_transaction(&self.pool, |tx| {
@@ -228,7 +232,10 @@ impl CatalogService {
 
     // ── Images ──────────────────────────────────────────────
 
-    pub async fn list_images(&self, product_id: Uuid) -> Result<Vec<ProductImageRes>, AppError> {
+    pub async fn list_images(
+        &self,
+        product_id: ProductId,
+    ) -> Result<Vec<ProductImageRes>, AppError> {
         let images = repository::list_images_by_product(&self.pool, product_id).await?;
         Ok(images.into_iter().map(ProductImageRes::new).collect())
     }
@@ -236,7 +243,7 @@ impl CatalogService {
     pub async fn add_image(
         &self,
         current_user: &CurrentUser,
-        product_id: Uuid,
+        product_id: ProductId,
         req: AddProductImageReq,
     ) -> Result<ProductImageRes, AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
@@ -269,7 +276,7 @@ impl CatalogService {
     pub async fn delete_image(
         &self,
         current_user: &CurrentUser,
-        product_id: Uuid,
+        product_id: ProductId,
         image_id: Uuid,
     ) -> Result<(), AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;

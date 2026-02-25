@@ -1,5 +1,5 @@
 use crate::categories::entities::CategoryEntity;
-use crate::categories::value_objects::{CategoryName, LtreeLabel};
+use crate::categories::value_objects::{CategoryId, CategoryName, LtreeLabel};
 use crate::common::value_objects::Slug;
 use serde::{Deserialize, Serialize};
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
@@ -60,7 +60,7 @@ pub struct ValidCreateCategoryReq {
     pub name: CategoryName,
     pub slug: Slug,
     pub label: LtreeLabel,
-    pub parent_id: Option<Uuid>,
+    pub parent_id: Option<CategoryId>,
     pub description: Option<String>,
 }
 
@@ -79,7 +79,7 @@ impl TryFrom<CreateCategoryReq> for ValidCreateCategoryReq {
             name,
             slug,
             label,
-            parent_id: req.parent_id,
+            parent_id: req.parent_id.map(CategoryId::new),
             description: req.description,
         })
     }

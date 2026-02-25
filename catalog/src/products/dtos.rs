@@ -1,3 +1,5 @@
+use crate::brands::value_objects::BrandId;
+use crate::categories::value_objects::CategoryId;
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
 use crate::products::repository;
 use crate::products::value_objects::{
@@ -171,20 +173,14 @@ pub struct ProductDetailRes {
 
 // ── Validated DTOs ──────────────────────────────────────────
 
-/// Fully validated product for creation.
-/// Enforces both value-object validation and FK referential integrity:
-/// - All fields are validated value objects (name, slug, price, currency)
-/// - category_id references an existing category (if set)
-/// - brand_id references an existing brand (if set)
-/// - brand is associated with category via brand_categories (if both set)
 pub struct ValidCreateProductReq {
     pub name: ProductName,
     pub slug: Slug,
     pub description: Option<String>,
     pub base_price: Price,
     pub currency: Currency,
-    pub category_id: Option<Uuid>,
-    pub brand_id: Option<Uuid>,
+    pub category_id: Option<CategoryId>,
+    pub brand_id: Option<BrandId>,
 }
 
 impl ValidCreateProductReq {
@@ -195,7 +191,9 @@ impl ValidCreateProductReq {
             None => Slug::from_name(name.as_str())?,
         };
 
-        validate_fk_references(pool, req.category_id, req.brand_id).await?;
+        let category_id = req.category_id.map(CategoryId::new);
+        let brand_id = req.brand_id.map(BrandId::new);
+        validate_fk_references(pool, category_id, brand_id).await?;
 
         Ok(Self {
             name,
@@ -206,23 +204,20 @@ impl ValidCreateProductReq {
                 Some(c) => Currency::new(&c)?,
                 None => Currency::default(),
             },
-            category_id: req.category_id,
-            brand_id: req.brand_id,
+            category_id,
+            brand_id,
         })
     }
 }
 
-/// Fully validated product update.
-/// Enforces value-object validation on provided fields, then validates
-/// effective FK state (new values merged with existing product).
 pub struct ValidUpdateProductReq {
     pub name: Option<ProductName>,
     pub slug: Option<Slug>,
     pub description: Option<String>,
     pub base_price: Option<Price>,
     pub currency: Option<Currency>,
-    pub category_id: Option<Uuid>,
-    pub brand_id: Option<Uuid>,
+    pub category_id: Option<CategoryId>,
+    pub brand_id: Option<BrandId>,
     pub status: Option<ProductStatus>,
 }
 
@@ -233,8 +228,14 @@ impl ValidUpdateProductReq {
         existing: &ProductEntity,
     ) -> Result<Self, AppError> {
         // Merge: use updated value if present, else keep existing
-        let effective_category = req.category_id.or(existing.category_id);
-        let effective_brand = req.brand_id.or(existing.brand_id);
+        let effective_category = req
+            .category_id
+            .map(CategoryId::new)
+            .or(existing.category_id.map(CategoryId::new));
+        let effective_brand = req
+            .brand_id
+            .map(BrandId::new)
+            .or(existing.brand_id.map(BrandId::new));
         validate_fk_references(pool, effective_category, effective_brand).await?;
         Ok(Self {
             name: req.name.map(|n| ProductName::new(&n)).transpose()?,
@@ -252,8 +253,8 @@ impl ValidUpdateProductReq {
 /// Core FK validation: existence checks + brand-category association.
 async fn validate_fk_references(
     pool: &PgPool,
-    category_id: Option<Uuid>,
-    brand_id: Option<Uuid>,
+    category_id: Option<CategoryId>,
+    brand_id: Option<BrandId>,
 ) -> Result<(), AppError> {
     if let Some(cat_id) = category_id {
         if !repository::category_exists(pool, cat_id).await? {

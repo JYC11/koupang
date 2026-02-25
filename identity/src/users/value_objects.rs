@@ -3,8 +3,6 @@ use regex::Regex;
 use shared::errors::AppError;
 use std::fmt;
 
-// ── Regexes (compiled once) ─────────────────────────────────
-
 static EMAIL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap());
 
@@ -12,7 +10,9 @@ static PHONE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\+[1-9]\d{0,2}(-?\d+)+
 
 static USERNAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap());
 
-// ── Email ───────────────────────────────────────────────────
+shared::valid_id!(UserId);
+shared::valid_id!(PasswordTokenId);
+shared::valid_id!(EmailTokenId);
 
 #[derive(Debug, Clone)]
 pub struct Email(String);

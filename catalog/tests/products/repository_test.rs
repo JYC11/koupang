@@ -2,9 +2,11 @@ use crate::common::{
     associate_brand_category, create_test_brand, create_test_category, sample_add_image_req,
     sample_create_product_req, sample_create_product_with_fks, sample_create_sku_req, test_db,
 };
+use catalog::brands::value_objects::BrandId;
+use catalog::categories::value_objects::CategoryId;
 use catalog::products::dtos::{ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq};
 use catalog::products::repository;
-use catalog::products::value_objects::{Currency, Price, ProductName, Slug};
+use catalog::products::value_objects::{Currency, Price, ProductId, ProductName, Slug};
 use uuid::Uuid;
 
 /// VO-validate a CreateProductReq into a ValidatedCreateProduct, bypassing FK checks for repo tests.
@@ -25,8 +27,8 @@ fn validated_product(req: catalog::products::dtos::CreateProductReq) -> ValidCre
         description: req.description,
         base_price,
         currency,
-        category_id: req.category_id,
-        brand_id: req.brand_id,
+        category_id: req.category_id.map(CategoryId::new),
+        brand_id: req.brand_id.map(BrandId::new),
     }
 }
 
@@ -82,7 +84,7 @@ async fn get_product_by_slug() {
 #[tokio::test]
 async fn get_nonexistent_product_returns_error() {
     let db = test_db().await;
-    let result = repository::get_product_by_id(&db.pool, Uuid::new_v4()).await;
+    let result = repository::get_product_by_id(&db.pool, ProductId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -277,7 +279,7 @@ async fn category_exists_returns_true_for_existing() {
 async fn category_exists_returns_false_for_nonexistent() {
     let db = test_db().await;
     assert!(
-        !repository::category_exists(&db.pool, Uuid::new_v4())
+        !repository::category_exists(&db.pool, CategoryId::new(Uuid::new_v4()))
             .await
             .unwrap()
     );
@@ -295,7 +297,7 @@ async fn brand_exists_returns_true_for_existing() {
 async fn brand_exists_returns_false_for_nonexistent() {
     let db = test_db().await;
     assert!(
-        !repository::brand_exists(&db.pool, Uuid::new_v4())
+        !repository::brand_exists(&db.pool, BrandId::new(Uuid::new_v4()))
             .await
             .unwrap()
     );

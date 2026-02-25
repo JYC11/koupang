@@ -1,5 +1,6 @@
 use crate::users::dtos::{ValidUserCreateReq, ValidUserUpdateReq};
 use crate::users::entities::{EmailVerificationTokenEntity, PasswordResetTokenEntity, UserEntity};
+use crate::users::value_objects::{Email, EmailTokenId, PasswordTokenId, UserId, Username};
 use chrono::{DateTime, Utc};
 use shared::db::PgExec;
 use shared::errors::AppError;
@@ -8,10 +9,10 @@ use uuid::Uuid;
 
 pub async fn get_user_by_id<'e>(
     executor: impl PgExec<'e>,
-    id: Uuid,
+    id: UserId,
 ) -> Result<UserEntity, AppError> {
     sqlx::query_as::<_, UserEntity>("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("User not found: {}", e)))
@@ -19,12 +20,12 @@ pub async fn get_user_by_id<'e>(
 
 pub async fn get_user_by_username<'e>(
     executor: impl PgExec<'e>,
-    username: &String,
+    username: Username,
 ) -> Result<UserEntity, AppError> {
     sqlx::query_as::<_, UserEntity>(
         "SELECT * FROM users WHERE username = $1 AND deleted_at IS NULL",
     )
-    .bind(username)
+    .bind(username.as_str())
     .fetch_one(executor)
     .await
     .map_err(|e| AppError::NotFound(format!("User not found: {}", e)))
@@ -34,7 +35,7 @@ pub async fn create_user(
     tx: &mut PgConnection,
     req: ValidUserCreateReq,
     hashed_password: &str,
-) -> Result<Uuid, AppError> {
+) -> Result<UserId, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO users (username, password, email, phone, role)
              VALUES ($1, $2, $3, $4, $5)
@@ -49,12 +50,12 @@ pub async fn create_user(
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to create user: {}", e)))?;
 
-    Ok(row.0)
+    Ok(UserId::new(row.0))
 }
 
 pub async fn create_verification_token(
     tx: &mut PgConnection,
-    user_id: Uuid,
+    user_id: UserId,
     token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
@@ -62,7 +63,7 @@ pub async fn create_verification_token(
         "INSERT INTO email_verification_tokens (user_id, token, expires_at)
              VALUES ($1, $2, $3)",
     )
-    .bind(user_id)
+    .bind(user_id.value())
     .bind(token)
     .bind(expires_at)
     .execute(&mut *tx)
@@ -88,9 +89,12 @@ pub async fn get_valid_verification_token<'e>(
     .map_err(|_| AppError::BadRequest("Invalid or expired verification token".to_string()))
 }
 
-pub async fn mark_token_used(tx: &mut PgConnection, token_id: Uuid) -> Result<(), AppError> {
+pub async fn mark_token_used(
+    tx: &mut PgConnection,
+    token_id: EmailTokenId,
+) -> Result<(), AppError> {
     sqlx::query("UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1")
-        .bind(token_id)
+        .bind(token_id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| {
@@ -100,9 +104,9 @@ pub async fn mark_token_used(tx: &mut PgConnection, token_id: Uuid) -> Result<()
     Ok(())
 }
 
-pub async fn verify_user_email(tx: &mut PgConnection, user_id: Uuid) -> Result<(), AppError> {
+pub async fn verify_user_email(tx: &mut PgConnection, user_id: UserId) -> Result<(), AppError> {
     sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
-        .bind(user_id)
+        .bind(user_id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| {
@@ -114,7 +118,7 @@ pub async fn verify_user_email(tx: &mut PgConnection, user_id: Uuid) -> Result<(
 
 pub async fn update_user(
     tx: &mut PgConnection,
-    id: Uuid,
+    id: UserId,
     req: ValidUserUpdateReq,
 ) -> Result<(), AppError> {
     let result = sqlx::query(
@@ -126,7 +130,7 @@ pub async fn update_user(
     .bind(req.email.as_str())
     .bind(req.phone.as_str())
     .bind(&req.role)
-    .bind(id)
+    .bind(id.value())
     .execute(&mut *tx)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)))?;
@@ -138,10 +142,10 @@ pub async fn update_user(
     Ok(())
 }
 
-pub async fn delete_user(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_user(tx: &mut PgConnection, id: UserId) -> Result<(), AppError> {
     let result =
         sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
+            .bind(id.value())
             .execute(&mut *tx)
             .await
             .map_err(|e| AppError::InternalServerError(format!("Failed to delete user: {}", e)))?;
@@ -157,10 +161,10 @@ pub async fn delete_user(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError
 
 pub async fn get_user_by_email<'e>(
     executor: impl PgExec<'e>,
-    email: &str,
+    email: Email,
 ) -> Result<UserEntity, AppError> {
     sqlx::query_as::<_, UserEntity>("SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL")
-        .bind(email)
+        .bind(email.as_str())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("User not found: {}", e)))
@@ -168,7 +172,7 @@ pub async fn get_user_by_email<'e>(
 
 pub async fn create_password_reset_token(
     tx: &mut PgConnection,
-    user_id: Uuid,
+    user_id: UserId,
     token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
@@ -176,7 +180,7 @@ pub async fn create_password_reset_token(
         "INSERT INTO password_reset_tokens (user_id, token, expires_at)
              VALUES ($1, $2, $3)",
     )
-    .bind(user_id)
+    .bind(user_id.value())
     .bind(token)
     .bind(expires_at)
     .execute(&mut *tx)
@@ -202,9 +206,12 @@ pub async fn get_valid_password_reset_token<'e>(
     .map_err(|_| AppError::BadRequest("Invalid or expired password reset token".to_string()))
 }
 
-pub async fn mark_reset_token_used(tx: &mut PgConnection, token_id: Uuid) -> Result<(), AppError> {
+pub async fn mark_reset_token_used(
+    tx: &mut PgConnection,
+    token_id: PasswordTokenId,
+) -> Result<(), AppError> {
     sqlx::query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1")
-        .bind(token_id)
+        .bind(token_id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| {
@@ -216,12 +223,12 @@ pub async fn mark_reset_token_used(tx: &mut PgConnection, token_id: Uuid) -> Res
 
 pub async fn update_user_password(
     tx: &mut PgConnection,
-    user_id: Uuid,
+    user_id: UserId,
     hashed_password: &str,
 ) -> Result<(), AppError> {
     sqlx::query("UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2")
         .bind(hashed_password)
-        .bind(user_id)
+        .bind(user_id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| {

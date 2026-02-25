@@ -1,12 +1,12 @@
 use crate::users::entities::UserEntity;
-use crate::users::value_objects::{Email, Password, Phone, Username};
+use crate::users::value_objects::{Email, Password, Phone, UserId, Username};
 use shared::auth::Role;
 use shared::errors::AppError;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct User {
-    pub id: Uuid,
+    pub id: UserId,
     pub username: Username,
     pub password: Password,
     pub email: Email,
@@ -19,7 +19,7 @@ impl TryFrom<UserEntity> for User {
 
     fn try_from(entity: UserEntity) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: entity.id,
+            id: UserId::new(entity.id),
             username: Username::new(&entity.username)?,
             password: Password::new(&entity.password)?,
             email: Email::new(&entity.email)?,

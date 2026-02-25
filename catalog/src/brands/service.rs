@@ -2,14 +2,15 @@ use crate::brands::dtos::{
     BrandRes, CreateBrandReq, UpdateBrandReq, ValidCreateBrandReq, ValidUpdateBrandReq,
 };
 use crate::brands::repository;
+use crate::brands::value_objects::BrandId;
 use crate::categories::dtos::CategoryRes;
 use crate::categories::repository as category_repo;
+use crate::categories::value_objects::CategoryId;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
 use shared::db::PgPool;
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
-use uuid::Uuid;
 
 pub struct BrandService {
     pool: PgPool,
@@ -43,7 +44,7 @@ impl BrandService {
         Ok(BrandRes::new(brand))
     }
 
-    pub async fn get_brand(&self, id: Uuid) -> Result<BrandRes, AppError> {
+    pub async fn get_brand(&self, id: BrandId) -> Result<BrandRes, AppError> {
         let brand = repository::get_brand_by_id(&self.pool, id).await?;
         Ok(BrandRes::new(brand))
     }
@@ -61,7 +62,7 @@ impl BrandService {
     pub async fn update_brand(
         &self,
         current_user: &CurrentUser,
-        id: Uuid,
+        id: BrandId,
         req: UpdateBrandReq,
     ) -> Result<(), AppError> {
         require_admin(current_user)?;
@@ -82,7 +83,11 @@ impl BrandService {
         Ok(())
     }
 
-    pub async fn delete_brand(&self, current_user: &CurrentUser, id: Uuid) -> Result<(), AppError> {
+    pub async fn delete_brand(
+        &self,
+        current_user: &CurrentUser,
+        id: BrandId,
+    ) -> Result<(), AppError> {
         require_admin(current_user)?;
         repository::get_brand_by_id(&self.pool, id).await?;
 
@@ -111,8 +116,8 @@ impl BrandService {
     pub async fn associate_category(
         &self,
         current_user: &CurrentUser,
-        brand_id: Uuid,
-        category_id: Uuid,
+        brand_id: BrandId,
+        category_id: CategoryId,
     ) -> Result<(), AppError> {
         require_admin(current_user)?;
 
@@ -138,8 +143,8 @@ impl BrandService {
     pub async fn disassociate_category(
         &self,
         current_user: &CurrentUser,
-        brand_id: Uuid,
-        category_id: Uuid,
+        brand_id: BrandId,
+        category_id: CategoryId,
     ) -> Result<(), AppError> {
         require_admin(current_user)?;
 
@@ -160,7 +165,7 @@ impl BrandService {
 
     pub async fn list_categories_for_brand(
         &self,
-        brand_id: Uuid,
+        brand_id: BrandId,
     ) -> Result<Vec<CategoryRes>, AppError> {
         repository::get_brand_by_id(&self.pool, brand_id).await?;
         let categories = repository::list_categories_for_brand(&self.pool, brand_id).await?;

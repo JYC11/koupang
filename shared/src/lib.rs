@@ -9,6 +9,7 @@ pub mod email;
 pub mod errors;
 pub mod grpc;
 pub mod health;
+pub mod new_types;
 pub mod observability;
 pub mod responses;
 pub mod server;

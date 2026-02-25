@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use identity::app;
 use identity::users::dtos::{UserCreateReq, UserLoginReq};
+use identity::users::value_objects::Username;
 use shared::auth::jwt::JwtTokens;
 use shared::db::PgPool;
 use shared::test_utils::http::{body_bytes, body_json};
@@ -55,9 +56,12 @@ async fn register_and_login(pool: &PgPool, req: &UserCreateReq) -> (String, Stri
     let tokens: JwtTokens = serde_json::from_slice(&body_bytes(resp).await).unwrap();
 
     // Get user id via internal endpoint - find the user
-    let user = identity::users::repository::get_user_by_username(pool, &req.username)
-        .await
-        .unwrap();
+    let user = identity::users::repository::get_user_by_username(
+        pool,
+        Username::new(&req.username).unwrap(),
+    )
+    .await
+    .unwrap();
 
     (
         tokens.access_token,
@@ -274,9 +278,12 @@ async fn get_other_user_non_admin_returns_403() {
         .oneshot(register_request(&req2))
         .await
         .unwrap();
-    let other_user = identity::users::repository::get_user_by_username(&pool, &req2.username)
-        .await
-        .unwrap();
+    let other_user = identity::users::repository::get_user_by_username(
+        &pool,
+        Username::new(&req2.username).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let state2 = test_app_state(pool);
     let router2 = app(state2);
@@ -307,9 +314,12 @@ async fn admin_can_get_any_user() {
         .oneshot(register_request(&user_req))
         .await
         .unwrap();
-    let regular_user = identity::users::repository::get_user_by_username(&pool, &user_req.username)
-        .await
-        .unwrap();
+    let regular_user = identity::users::repository::get_user_by_username(
+        &pool,
+        Username::new(&user_req.username).unwrap(),
+    )
+    .await
+    .unwrap();
 
     // Register and login as admin
     let (admin_token, _, _) = register_and_login(&pool, &admin_create_req()).await;
@@ -371,9 +381,12 @@ async fn update_other_user_non_admin_returns_403() {
         .oneshot(register_request(&req2))
         .await
         .unwrap();
-    let other_user = identity::users::repository::get_user_by_username(&pool, &req2.username)
-        .await
-        .unwrap();
+    let other_user = identity::users::repository::get_user_by_username(
+        &pool,
+        Username::new(&req2.username).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let state2 = test_app_state(pool);
     let router2 = app(state2);

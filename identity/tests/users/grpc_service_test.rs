@@ -147,7 +147,7 @@ async fn get_user_deleted_returns_not_found() {
 
     // Soft-delete the user
     sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1")
-        .bind(user_id)
+        .bind(user_id.value())
         .execute(&pool)
         .await
         .unwrap();

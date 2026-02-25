@@ -4,6 +4,7 @@ use crate::common::{
     test_db,
 };
 use catalog::categories::dtos::{CreateCategoryReq, UpdateCategoryReq};
+use catalog::categories::value_objects::CategoryId;
 
 // ── Create ──────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ async fn get_category_by_id() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&created.id).unwrap();
+    let id = CategoryId::new(uuid::Uuid::parse_str(&created.id).unwrap());
     let fetched = service.get_category(id).await.unwrap();
     assert_eq!(fetched.name, "Books");
     assert_eq!(fetched.id, created.id);
@@ -160,7 +161,9 @@ async fn get_nonexistent_category_fails() {
     let db = test_db().await;
     let service = test_category_service(db.pool.clone());
 
-    let result = service.get_category(uuid::Uuid::new_v4()).await;
+    let result = service
+        .get_category(CategoryId::new(uuid::Uuid::new_v4()))
+        .await;
     assert!(result.is_err());
 }
 
@@ -253,7 +256,7 @@ async fn update_category_name() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&created.id).unwrap();
+    let id = CategoryId::new(uuid::Uuid::parse_str(&created.id).unwrap());
     service
         .update_category(
             &admin,
@@ -311,7 +314,7 @@ async fn delete_leaf_category() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&created.id).unwrap();
+    let id = CategoryId::new(uuid::Uuid::parse_str(&created.id).unwrap());
     service.delete_category(&admin, id).await.unwrap();
 
     let result = service.get_category(id).await;

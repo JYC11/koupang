@@ -9,55 +9,6 @@ static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)*$
 
 static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^https?://.+").unwrap());
 
-// ── validated_name! macro ──────────────────────────────────
-//
-// Generates a newtype string wrapper with: non-empty, max length, trimmed.
-// Usage: validated_name!(TypeName, "display name", max_len);
-
-#[macro_export]
-macro_rules! validated_name {
-    ($name:ident, $display:expr, $max_len:expr) => {
-        #[derive(Debug, Clone)]
-        pub struct $name(String);
-
-        impl $name {
-            pub fn new(input: &str) -> Result<Self, shared::errors::AppError> {
-                let trimmed = input.trim();
-
-                if trimmed.is_empty() {
-                    return Err(shared::errors::AppError::BadRequest(format!(
-                        "{} must not be empty",
-                        $display
-                    )));
-                }
-
-                if trimmed.len() > $max_len {
-                    return Err(shared::errors::AppError::BadRequest(format!(
-                        "{} must not exceed {} characters",
-                        $display, $max_len
-                    )));
-                }
-
-                Ok(Self(trimmed.to_string()))
-            }
-
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-
-            pub fn into_inner(self) -> String {
-                self.0
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    };
-}
-
 // ── Slug ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

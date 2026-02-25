@@ -9,7 +9,9 @@ use crate::users::repository::{
     get_valid_verification_token, mark_reset_token_used, mark_token_used, update_user,
     update_user_password, verify_user_email,
 };
-use crate::users::value_objects::Password;
+use crate::users::value_objects::{
+    Email, EmailTokenId, Password, PasswordTokenId, UserId, Username,
+};
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
@@ -107,8 +109,8 @@ impl UserService {
         let token_entity = get_valid_verification_token(&self.pool, &req.token).await?;
 
         with_transaction(&self.pool, |tx| {
-            let token_id = token_entity.id;
-            let user_id = token_entity.user_id;
+            let token_id = EmailTokenId::new(token_entity.id);
+            let user_id = UserId::new(token_entity.user_id);
             Box::pin(async move {
                 verify_user_email(tx.as_executor(), user_id)
                     .await
@@ -127,12 +129,12 @@ impl UserService {
         Ok(())
     }
 
-    pub async fn get_user(&self, id: Uuid) -> Result<UserRes, AppError> {
+    pub async fn get_user(&self, id: UserId) -> Result<UserRes, AppError> {
         let user = get_user_by_id(&self.pool, id).await?;
         Ok(UserRes::new(user))
     }
 
-    pub async fn update_user(&self, id: Uuid, req: UserUpdateReq) -> Result<(), AppError> {
+    pub async fn update_user(&self, id: UserId, req: UserUpdateReq) -> Result<(), AppError> {
         let validated: ValidUserUpdateReq = req.try_into()?;
 
         with_transaction(&self.pool, |tx| {
@@ -151,7 +153,7 @@ impl UserService {
         Ok(())
     }
 
-    pub async fn delete_user(&self, id: Uuid) -> Result<(), AppError> {
+    pub async fn delete_user(&self, id: UserId) -> Result<(), AppError> {
         with_transaction(&self.pool, |tx| {
             Box::pin(async move {
                 delete_user(tx.as_executor(), id)
@@ -170,7 +172,7 @@ impl UserService {
 
     pub async fn login_user(&self, req: UserLoginReq) -> Result<UserLoginRes, AppError> {
         // Find user by username/email
-        let user = get_user_by_username(&self.pool, &req.username).await?;
+        let user = get_user_by_username(&self.pool, Username::new(&req.username)?).await?;
 
         // Check email verification
         if !user.email_verified {
@@ -209,7 +211,7 @@ impl UserService {
             .validate_refresh_token(&req.refresh_token)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
-        let user = get_user_by_id(&self.pool.clone(), claims.sub).await?;
+        let user = get_user_by_id(&self.pool.clone(), UserId::new(claims.sub)).await?;
 
         // Generate new access token
         let access_token = self
@@ -222,14 +224,14 @@ impl UserService {
 
     pub async fn forgot_password(&self, req: ForgotPasswordReq) -> Result<(), AppError> {
         // Look up user by email — if not found, return Ok silently (don't leak email existence)
-        let user = match get_user_by_email(&self.pool, &req.email).await {
+        let user = match get_user_by_email(&self.pool, Email::new(&req.email)?).await {
             Ok(user) => user,
             Err(_) => return Ok(()),
         };
 
         let token = generate_verification_token();
         let token_clone = token.clone();
-        let user_id = user.id;
+        let user_id = UserId::new(user.id);
         let expires_at = Utc::now() + Duration::hours(24);
 
         with_transaction(&self.pool, |tx| {
@@ -265,8 +267,8 @@ impl UserService {
         let validated_password = Password::new(&req.new_password)?;
         let hashed_password = hash_password(validated_password.as_str())?;
 
-        let token_id = token_entity.id;
-        let user_id = token_entity.user_id;
+        let token_id = PasswordTokenId::new(token_entity.id);
+        let user_id = UserId::new(token_entity.user_id);
 
         with_transaction(&self.pool, |tx| {
             let hashed = hashed_password.clone();
@@ -290,7 +292,7 @@ impl UserService {
 
     pub async fn change_password(
         &self,
-        user_id: Uuid,
+        user_id: UserId,
         req: ChangePasswordReq,
     ) -> Result<(), AppError> {
         let user = get_user_by_id(&self.pool, user_id).await?;
@@ -325,7 +327,7 @@ impl UserService {
         Ok(())
     }
 
-    async fn get_cached_user(&self, id: Uuid) -> Option<CurrentUser> {
+    async fn get_cached_user(&self, id: UserId) -> Option<CurrentUser> {
         let mut conn = self.redis_conn.as_ref()?.clone();
         let key = format!("{}{}", USER_CACHE_PREFIX, id);
         let value: Option<String> = conn.get(&key).await.ok()?;
@@ -334,7 +336,7 @@ impl UserService {
 
     async fn cache_user(&self, user: &CurrentUser) {
         if let Some(conn) = &self.redis_conn {
-            let key = format!("{}{}", USER_CACHE_PREFIX, user.id);
+            let key = format!("{}{}", USER_CACHE_PREFIX, UserId::new(user.id));
             if let Ok(value) = serde_json::to_string(user) {
                 let mut conn = conn.clone();
                 let _: Result<(), redis::RedisError> =
@@ -343,7 +345,7 @@ impl UserService {
         }
     }
 
-    async fn evict_user_cache(&self, id: Uuid) {
+    async fn evict_user_cache(&self, id: UserId) {
         if let Some(conn) = &self.redis_conn {
             let key = format!("{}{}", USER_CACHE_PREFIX, id);
             let mut conn = conn.clone();
@@ -356,11 +358,12 @@ impl UserService {
 impl GetCurrentUser for UserService {
     async fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError> {
         // Check cache first
-        if let Some(cached) = self.get_cached_user(id).await {
+        let user_id = UserId::new(id);
+        if let Some(cached) = self.get_cached_user(user_id).await {
             return Ok(cached);
         }
 
-        let user = get_user_by_id(&self.pool, id).await?;
+        let user = get_user_by_id(&self.pool, user_id).await?;
 
         let current_user = CurrentUser {
             id: user.id,

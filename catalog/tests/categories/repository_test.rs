@@ -1,11 +1,11 @@
 use crate::common::test_db;
 use catalog::categories::dtos::{ValidCreateCategoryReq, ValidUpdateCategoryReq};
 use catalog::categories::repository;
-use catalog::categories::value_objects::{CategoryName, LtreeLabel};
+use catalog::categories::value_objects::{CategoryId, CategoryName, LtreeLabel};
 use catalog::common::value_objects::Slug;
 use uuid::Uuid;
 
-fn sample_create_category(name: &str, parent_id: Option<Uuid>) -> ValidCreateCategoryReq {
+fn sample_create_category(name: &str, parent_id: Option<CategoryId>) -> ValidCreateCategoryReq {
     ValidCreateCategoryReq {
         name: CategoryName::new(name).unwrap(),
         slug: Slug::from_name(name).unwrap(),
@@ -16,7 +16,7 @@ fn sample_create_category(name: &str, parent_id: Option<Uuid>) -> ValidCreateCat
 }
 
 /// Helper: create a root category and return (id, path).
-async fn create_root(db: &shared::test_utils::db::TestDb, name: &str) -> (Uuid, String) {
+async fn create_root(db: &shared::test_utils::db::TestDb, name: &str) -> (CategoryId, String) {
     let req = sample_create_category(name, None);
     let path = req.label.as_str().to_string();
     let mut conn = db.pool.acquire().await.unwrap();
@@ -30,10 +30,10 @@ async fn create_root(db: &shared::test_utils::db::TestDb, name: &str) -> (Uuid, 
 async fn create_child(
     db: &shared::test_utils::db::TestDb,
     name: &str,
-    parent_id: Uuid,
+    parent_id: CategoryId,
     parent_path: &str,
     depth: i32,
-) -> (Uuid, String) {
+) -> (CategoryId, String) {
     let req = sample_create_category(name, Some(parent_id));
     let path = format!("{}.{}", parent_path, req.label.as_str());
     let mut conn = db.pool.acquire().await.unwrap();
@@ -54,7 +54,7 @@ async fn create_and_get_category() {
         .await
         .unwrap();
 
-    assert_eq!(cat.id, cat_id);
+    assert_eq!(cat.id, cat_id.value());
     assert_eq!(cat.name, "Electronics");
     assert_eq!(cat.slug, "electronics");
     assert_eq!(cat.path, "electronics");
@@ -78,7 +78,7 @@ async fn get_category_by_slug() {
 #[tokio::test]
 async fn get_nonexistent_category_returns_error() {
     let db = test_db().await;
-    let result = repository::get_category_by_id(&db.pool, Uuid::new_v4()).await;
+    let result = repository::get_category_by_id(&db.pool, CategoryId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -132,7 +132,7 @@ async fn create_child_category() {
     assert_eq!(child.name, "Phones");
     assert_eq!(child.path, "electronics.phones");
     assert_eq!(child.depth, 1);
-    assert_eq!(child.parent_id, Some(root_id));
+    assert_eq!(child.parent_id, Some(root_id.value()));
 }
 
 #[tokio::test]
@@ -245,7 +245,8 @@ async fn update_nonexistent_category_returns_error() {
         name: Some(CategoryName::new("Ghost").unwrap()),
         description: None,
     };
-    let result = repository::update_category(&mut *conn, Uuid::new_v4(), update).await;
+    let result =
+        repository::update_category(&mut *conn, CategoryId::new(Uuid::new_v4()), update).await;
     assert!(result.is_err());
 }
 
@@ -269,7 +270,7 @@ async fn delete_category() {
 async fn delete_nonexistent_category_returns_error() {
     let db = test_db().await;
     let mut conn = db.pool.acquire().await.unwrap();
-    let result = repository::delete_category(&mut *conn, Uuid::new_v4()).await;
+    let result = repository::delete_category(&mut *conn, CategoryId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 

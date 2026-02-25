@@ -7,7 +7,8 @@ static LTREE_LABEL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z][a-z0-9_]*$
 
 // ── CategoryName (via macro) ──────────────────────────────
 
-crate::validated_name!(CategoryName, "Category name", 255);
+shared::validated_name!(CategoryName, "Category name", 255);
+shared::valid_id!(CategoryId);
 
 // ── LtreeLabel ────────────────────────────────────────────
 

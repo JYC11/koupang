@@ -5,7 +5,7 @@ use crate::common::{
     test_db,
 };
 use catalog::products::dtos::UpdateProductReq;
-use catalog::products::value_objects::ProductStatus;
+use catalog::products::value_objects::{ProductId, ProductStatus, SkuId};
 
 // ── Product service tests ───────────────────────────────────
 
@@ -26,7 +26,7 @@ async fn create_and_get_product() {
 
     // Get by ID
     let fetched = service
-        .get_product(uuid::Uuid::parse_str(&product.id).unwrap())
+        .get_product(ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap()))
         .await
         .unwrap();
     assert_eq!(fetched.name, "Test Widget");
@@ -57,7 +57,7 @@ async fn get_product_detail_includes_skus_and_images() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     // Add SKU and image
     service
@@ -90,7 +90,7 @@ async fn list_active_products_excludes_drafts() {
     assert!(active.is_empty());
 
     // Activate the product
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
     service
         .update_product(
             &seller,
@@ -124,7 +124,7 @@ async fn update_product_requires_ownership() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let result = service
         .update_product(
@@ -157,7 +157,7 @@ async fn admin_can_update_any_product() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let result = service
         .update_product(
@@ -190,7 +190,7 @@ async fn delete_product_requires_ownership() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let result = service.delete_product(&other_seller, product_id).await;
     assert!(result.is_err());
@@ -212,7 +212,7 @@ async fn create_and_list_skus() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let sku = service
         .create_sku(&seller, product_id, sample_create_sku_req())
@@ -235,13 +235,13 @@ async fn adjust_stock() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let sku = service
         .create_sku(&seller, product_id, sample_create_sku_req())
         .await
         .unwrap();
-    let sku_id = uuid::Uuid::parse_str(&sku.id).unwrap();
+    let sku_id = SkuId::new(uuid::Uuid::parse_str(&sku.id).unwrap());
 
     service.adjust_stock(&seller, sku_id, -50).await.unwrap();
 
@@ -261,7 +261,7 @@ async fn add_and_delete_image() {
         .create_product(&seller, sample_create_product_req())
         .await
         .unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let image = service
         .add_image(&seller, product_id, sample_add_image_req())
@@ -310,7 +310,10 @@ async fn create_product_with_nonexistent_category_fails() {
     let seller = seller_user();
 
     let fake_id = uuid::Uuid::new_v4();
-    let req = sample_create_product_with_fks(Some(fake_id), None);
+    let req = sample_create_product_with_fks(
+        Some(catalog::categories::value_objects::CategoryId::new(fake_id)),
+        None,
+    );
     let result = service.create_product(&seller, req).await;
 
     assert!(result.is_err());
@@ -325,7 +328,10 @@ async fn create_product_with_nonexistent_brand_fails() {
     let seller = seller_user();
 
     let fake_id = uuid::Uuid::new_v4();
-    let req = sample_create_product_with_fks(None, Some(fake_id));
+    let req = sample_create_product_with_fks(
+        None,
+        Some(catalog::brands::value_objects::BrandId::new(fake_id)),
+    );
     let result = service.create_product(&seller, req).await;
 
     assert!(result.is_err());
@@ -398,7 +404,7 @@ async fn update_product_brand_not_in_existing_category_fails() {
     // Create product with valid category + brand
     let req = sample_create_product_with_fks(Some(cat_id), Some(brand_id));
     let product = service.create_product(&seller, req).await.unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     // Create a second brand NOT associated with the category
     let other_brand_id = create_test_brand_named(&db.pool, "Other Brand").await;
@@ -415,7 +421,7 @@ async fn update_product_brand_not_in_existing_category_fails() {
                 base_price: None,
                 currency: None,
                 category_id: None,
-                brand_id: Some(other_brand_id),
+                brand_id: Some(other_brand_id.value()),
                 status: None,
             },
         )
@@ -442,7 +448,7 @@ async fn product_detail_includes_joined_names() {
 
     let req = sample_create_product_with_fks(Some(cat_id), Some(brand_id));
     let product = service.create_product(&seller, req).await.unwrap();
-    let product_id = uuid::Uuid::parse_str(&product.id).unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
 
     let detail = service.get_product_detail(product_id).await.unwrap();
     assert_eq!(detail.product.category_name.as_deref(), Some("Electronics"));

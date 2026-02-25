@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::brands::dtos::{AssociateCategoryReq, BrandRes, CreateBrandReq, UpdateBrandReq};
+use crate::brands::value_objects::BrandId;
 use crate::categories::dtos::CategoryRes;
+use crate::categories::value_objects::CategoryId;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;
@@ -52,6 +54,7 @@ async fn get_brand(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BrandRes>, AppError> {
+    let id = BrandId::new(id);
     let brand = app_state.brand_service.get_brand(id).await?;
     Ok(Json(brand))
 }
@@ -82,6 +85,7 @@ async fn update_brand(
     current_user: CurrentUser,
     Json(req): Json<UpdateBrandReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = BrandId::new(id);
     app_state
         .brand_service
         .update_brand(&current_user, id, req)
@@ -97,6 +101,7 @@ async fn delete_brand(
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = BrandId::new(id);
     app_state
         .brand_service
         .delete_brand(&current_user, id)
@@ -113,6 +118,7 @@ async fn list_categories_for_brand(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    let id = BrandId::new(id);
     let categories = app_state
         .brand_service
         .list_categories_for_brand(id)
@@ -126,9 +132,11 @@ async fn associate_category(
     current_user: CurrentUser,
     Json(req): Json<AssociateCategoryReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = BrandId::new(id);
+    let category_id = CategoryId::new(req.category_id);
     app_state
         .brand_service
-        .associate_category(&current_user, id, req.category_id)
+        .associate_category(&current_user, id, category_id)
         .await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
@@ -141,6 +149,8 @@ async fn disassociate_category(
     Path((brand_id, category_id)): Path<(Uuid, Uuid)>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let brand_id = BrandId::new(brand_id);
+    let category_id = CategoryId::new(category_id);
     app_state
         .brand_service
         .disassociate_category(&current_user, brand_id, category_id)

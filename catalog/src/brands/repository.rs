@@ -1,19 +1,20 @@
 use crate::brands::dtos::{ValidCreateBrandReq, ValidUpdateBrandReq};
 use crate::brands::entities::BrandEntity;
+use crate::brands::value_objects::BrandId;
 use crate::categories::entities::CategoryEntity;
+use crate::categories::value_objects::CategoryId;
 use shared::db::PgExec;
 use shared::errors::AppError;
 use sqlx::PgConnection;
-use uuid::Uuid;
 
 // ── Brand queries ──────────────────────────────────────────
 
 pub async fn get_brand_by_id<'e>(
     executor: impl PgExec<'e>,
-    id: Uuid,
+    id: BrandId,
 ) -> Result<BrandEntity, AppError> {
     sqlx::query_as::<_, BrandEntity>("SELECT * FROM brands WHERE id = $1")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("Brand not found: {}", e)))
@@ -40,8 +41,8 @@ pub async fn list_brands<'e>(executor: impl PgExec<'e>) -> Result<Vec<BrandEntit
 pub async fn create_brand(
     tx: &mut PgConnection,
     req: ValidCreateBrandReq,
-) -> Result<Uuid, AppError> {
-    let row: (Uuid,) = sqlx::query_as(
+) -> Result<BrandId, AppError> {
+    let row: (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO brands (name, slug, description, logo_url)
          VALUES ($1, $2, $3, $4)
          RETURNING id",
@@ -54,12 +55,12 @@ pub async fn create_brand(
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to create brand: {}", e)))?;
 
-    Ok(row.0)
+    Ok(BrandId::new(row.0))
 }
 
 pub async fn update_brand(
     tx: &mut PgConnection,
-    id: Uuid,
+    id: BrandId,
     req: ValidUpdateBrandReq,
 ) -> Result<(), AppError> {
     let mut set_parts: Vec<String> = Vec::new();
@@ -87,7 +88,7 @@ pub async fn update_brand(
 
     let sql = format!("UPDATE brands SET {} WHERE id = $1", set_parts.join(", "));
 
-    let mut query = sqlx::query(&sql).bind(id);
+    let mut query = sqlx::query(&sql).bind(id.value());
 
     if let Some(ref name) = req.name {
         query = query.bind(name.as_str());
@@ -111,9 +112,9 @@ pub async fn update_brand(
     Ok(())
 }
 
-pub async fn delete_brand(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_brand(tx: &mut PgConnection, id: BrandId) -> Result<(), AppError> {
     let result = sqlx::query("DELETE FROM brands WHERE id = $1")
-        .bind(id)
+        .bind(id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete brand: {}", e)))?;
@@ -126,10 +127,10 @@ pub async fn delete_brand(tx: &mut PgConnection, id: Uuid) -> Result<(), AppErro
 }
 
 /// Check if any products reference this brand.
-pub async fn has_products<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<bool, AppError> {
+pub async fn has_products<'e>(executor: impl PgExec<'e>, id: BrandId) -> Result<bool, AppError> {
     let row: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM products WHERE brand_id = $1 AND deleted_at IS NULL")
-            .bind(id)
+            .bind(id.value())
             .fetch_one(executor)
             .await
             .map_err(|e| {
@@ -143,15 +144,15 @@ pub async fn has_products<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<boo
 
 pub async fn associate_category(
     tx: &mut PgConnection,
-    brand_id: Uuid,
-    category_id: Uuid,
+    brand_id: BrandId,
+    category_id: CategoryId,
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)
          ON CONFLICT DO NOTHING",
     )
-    .bind(brand_id)
-    .bind(category_id)
+    .bind(brand_id.value())
+    .bind(category_id.value())
     .execute(&mut *tx)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to associate category: {}", e)))?;
@@ -161,13 +162,13 @@ pub async fn associate_category(
 
 pub async fn disassociate_category(
     tx: &mut PgConnection,
-    brand_id: Uuid,
-    category_id: Uuid,
+    brand_id: BrandId,
+    category_id: CategoryId,
 ) -> Result<(), AppError> {
     let result =
         sqlx::query("DELETE FROM brand_categories WHERE brand_id = $1 AND category_id = $2")
-            .bind(brand_id)
-            .bind(category_id)
+            .bind(brand_id.value())
+            .bind(category_id.value())
             .execute(&mut *tx)
             .await
             .map_err(|e| {
@@ -186,7 +187,7 @@ pub async fn disassociate_category(
 /// List categories associated with a brand.
 pub async fn list_categories_for_brand<'e>(
     executor: impl PgExec<'e>,
-    brand_id: Uuid,
+    brand_id: BrandId,
 ) -> Result<Vec<CategoryEntity>, AppError> {
     sqlx::query_as::<_, CategoryEntity>(
         "SELECT c.id, c.created_at, c.updated_at, c.name, c.slug, c.path::text as path,
@@ -196,7 +197,7 @@ pub async fn list_categories_for_brand<'e>(
          WHERE bc.brand_id = $1
          ORDER BY c.name ASC",
     )
-    .bind(brand_id)
+    .bind(brand_id.value())
     .fetch_all(executor)
     .await
     .map_err(|e| {

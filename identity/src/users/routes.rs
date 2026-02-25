@@ -12,6 +12,7 @@ use crate::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq,
     UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
+use crate::users::value_objects::UserId;
 use shared::auth::guards::require_access;
 use shared::auth::jwt::{CurrentUser, JwtTokens};
 use shared::auth::middleware::{AuthMiddleware, GetCurrentUser};
@@ -92,7 +93,7 @@ async fn get_one(
     current_user: CurrentUser,
 ) -> Result<Json<UserRes>, AppError> {
     require_access(&current_user, &id)?;
-    let user = app_state.service.get_user(id).await?;
+    let user = app_state.service.get_user(UserId::new(id)).await?;
     Ok(Json(user))
 }
 
@@ -103,7 +104,7 @@ async fn update(
     Json(req): Json<UserUpdateReq>,
 ) -> Result<impl IntoResponse, AppError> {
     require_access(&current_user, &id)?;
-    app_state.service.update_user(id, req).await?;
+    app_state.service.update_user(UserId::new(id), req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User updated successfully",
@@ -116,7 +117,7 @@ async fn delete_user(
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     require_access(&current_user, &id)?;
-    app_state.service.delete_user(id).await?;
+    app_state.service.delete_user(UserId::new(id)).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User deleted successfully",
@@ -130,7 +131,7 @@ async fn change_password(
 ) -> Result<impl IntoResponse, AppError> {
     app_state
         .service
-        .change_password(current_user.id, req)
+        .change_password(UserId::new(current_user.id), req)
         .await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,

@@ -5,6 +5,7 @@ use crate::common::{
 use identity::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserLoginReq, UserRefreshReq,
 };
+use identity::users::value_objects::{UserId, Username};
 use redis::AsyncCommands;
 use shared::auth::middleware::GetCurrentUser;
 use shared::test_utils::redis::TestRedis;
@@ -30,9 +31,10 @@ async fn create_user_hashes_password() {
     service.create_user(req).await.unwrap();
 
     // Fetch the raw entity to check the stored password
-    let user = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let user =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
     assert!(
         user.password.starts_with("$argon2"),
         "Password should be hashed with argon2, got: {}",
@@ -51,11 +53,12 @@ async fn get_user_returns_user_res() {
     service.create_user(req).await.unwrap();
 
     // Get the user id from the repository
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
-    let user_res = service.get_user(entity.id).await.unwrap();
+    let user_res = service.get_user(UserId::new(entity.id)).await.unwrap();
     assert_eq!(user_res.username, username);
     assert_eq!(user_res.email, email);
     // UserRes should not contain password field (it's not in the struct)
@@ -67,7 +70,7 @@ async fn get_nonexistent_user_returns_error() {
     let db = crate::common::test_db().await;
     let pool = db.pool.clone();
     let service = test_user_service(pool);
-    let result = service.get_user(Uuid::new_v4()).await;
+    let result = service.get_user(UserId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -80,15 +83,19 @@ async fn update_user_changes_fields() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     let update_req = sample_update_req();
     let new_username = update_req.username.clone();
-    service.update_user(entity.id, update_req).await.unwrap();
+    service
+        .update_user(UserId::new(entity.id), update_req)
+        .await
+        .unwrap();
 
-    let updated = service.get_user(entity.id).await.unwrap();
+    let updated = service.get_user(UserId::new(entity.id)).await.unwrap();
     assert_eq!(updated.username, new_username);
 }
 
@@ -101,13 +108,14 @@ async fn delete_user_makes_unfetchable() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
-    service.delete_user(entity.id).await.unwrap();
+    service.delete_user(UserId::new(entity.id)).await.unwrap();
 
-    let result = service.get_user(entity.id).await;
+    let result = service.get_user(UserId::new(entity.id)).await;
     assert!(result.is_err());
 }
 
@@ -220,9 +228,10 @@ async fn get_current_user_returns_correct_user() {
     let role = req.role.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     let current_user = service.get_by_id(entity.id).await.unwrap();
     assert_eq!(current_user.id, entity.id);
@@ -264,9 +273,10 @@ async fn verify_email_sets_email_verified() {
         .await
         .unwrap();
 
-    let user = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let user =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
     assert!(user.email_verified);
 }
 
@@ -395,13 +405,14 @@ async fn change_password_with_correct_current_succeeds() {
     let password = req.password.clone();
     service.create_user(req).await.unwrap();
 
-    let user = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let user =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     let result = service
         .change_password(
-            user.id,
+            UserId::new(user.id),
             ChangePasswordReq {
                 current_password: password,
                 new_password: "NewPassword4!".to_string(),
@@ -430,13 +441,14 @@ async fn change_password_with_wrong_current_fails() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let user = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let user =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     let result = service
         .change_password(
-            user.id,
+            UserId::new(user.id),
             ChangePasswordReq {
                 current_password: "wrongpassword".to_string(),
                 new_password: "NewPassword4!".to_string(),
@@ -456,13 +468,14 @@ async fn change_password_same_as_current_fails() {
     let password = req.password.clone();
     service.create_user(req).await.unwrap();
 
-    let user = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let user =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     let result = service
         .change_password(
-            user.id,
+            UserId::new(user.id),
             ChangePasswordReq {
                 current_password: password.clone(),
                 new_password: password,
@@ -492,9 +505,10 @@ async fn get_by_id_caches_user_in_redis() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     // Call get_by_id which should cache the user
     let current_user = service.get_by_id(entity.id).await.unwrap();
@@ -521,9 +535,10 @@ async fn get_by_id_cache_hit_returns_same_data() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     // First call — populates cache
     let first = service.get_by_id(entity.id).await.unwrap();
@@ -552,9 +567,10 @@ async fn update_user_evicts_cache() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     // Populate cache
     service.get_by_id(entity.id).await.unwrap();
@@ -564,7 +580,7 @@ async fn update_user_evicts_cache() {
 
     // Update user — should evict cache
     service
-        .update_user(entity.id, sample_update_req())
+        .update_user(UserId::new(entity.id), sample_update_req())
         .await
         .unwrap();
 
@@ -590,9 +606,10 @@ async fn delete_user_evicts_cache() {
     let username = req.username.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     // Populate cache
     service.get_by_id(entity.id).await.unwrap();
@@ -601,7 +618,7 @@ async fn delete_user_evicts_cache() {
     assert!(cached.is_some(), "Cache should be populated before delete");
 
     // Delete user — should evict cache
-    service.delete_user(entity.id).await.unwrap();
+    service.delete_user(UserId::new(entity.id)).await.unwrap();
 
     let cached: Option<String> = assert_conn.get(&key).await.unwrap();
     assert!(cached.is_none(), "Cache should be evicted after delete");
@@ -630,9 +647,10 @@ async fn change_password_evicts_cache() {
     let password = req.password.clone();
     service.create_user(req).await.unwrap();
 
-    let entity = identity::users::repository::get_user_by_username(&pool, &username)
-        .await
-        .unwrap();
+    let entity =
+        identity::users::repository::get_user_by_username(&pool, Username::new(&username).unwrap())
+            .await
+            .unwrap();
 
     // Populate cache
     service.get_by_id(entity.id).await.unwrap();
@@ -646,7 +664,7 @@ async fn change_password_evicts_cache() {
     // Change password — should evict cache
     service
         .change_password(
-            entity.id,
+            UserId::new(entity.id),
             ChangePasswordReq {
                 current_password: password,
                 new_password: "NewPassword4!".to_string(),

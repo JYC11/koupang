@@ -4,6 +4,8 @@ use crate::common::{
     test_brand_service, test_catalog_service, test_db,
 };
 use catalog::brands::dtos::{CreateBrandReq, UpdateBrandReq};
+use catalog::brands::value_objects::BrandId;
+use catalog::categories::value_objects::CategoryId;
 
 // ── Create ──────────────────────────────────────────────────
 
@@ -30,7 +32,7 @@ async fn create_and_get_brand() {
     );
 
     // Get by ID
-    let id = uuid::Uuid::parse_str(&brand.id).unwrap();
+    let id = BrandId::new(uuid::Uuid::parse_str(&brand.id).unwrap());
     let fetched = service.get_brand(id).await.unwrap();
     assert_eq!(fetched.name, "Samsung");
 }
@@ -63,7 +65,7 @@ async fn get_nonexistent_brand_fails() {
     let db = test_db().await;
     let service = test_brand_service(db.pool.clone());
 
-    let result = service.get_brand(uuid::Uuid::new_v4()).await;
+    let result = service.get_brand(BrandId::new(uuid::Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -120,7 +122,7 @@ async fn update_brand_name() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&brand.id).unwrap();
+    let id = BrandId::new(uuid::Uuid::parse_str(&brand.id).unwrap());
     service
         .update_brand(
             &admin,
@@ -157,7 +159,7 @@ async fn update_brand_logo_url() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&brand.id).unwrap();
+    let id = BrandId::new(uuid::Uuid::parse_str(&brand.id).unwrap());
     service
         .update_brand(
             &admin,
@@ -220,7 +222,7 @@ async fn delete_brand() {
         .await
         .unwrap();
 
-    let id = uuid::Uuid::parse_str(&brand.id).unwrap();
+    let id = BrandId::new(uuid::Uuid::parse_str(&brand.id).unwrap());
     service.delete_brand(&admin, id).await.unwrap();
 
     let result = service.get_brand(id).await;
@@ -297,7 +299,7 @@ async fn associate_nonexistent_category_fails() {
     let admin = admin_user();
 
     let result = service
-        .associate_category(&admin, brand_id, uuid::Uuid::new_v4())
+        .associate_category(&admin, brand_id, CategoryId::new(uuid::Uuid::new_v4()))
         .await;
     assert!(result.is_err());
 }

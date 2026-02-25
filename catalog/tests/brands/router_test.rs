@@ -193,8 +193,8 @@ async fn list_categories_for_brand_returns_200() {
 
     // Associate via SQL (already tested at service level)
     sqlx::query("INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)")
-        .bind(brand_id)
-        .bind(cat_id)
+        .bind(brand_id.value())
+        .bind(cat_id.value())
         .execute(&db.pool)
         .await
         .unwrap();
@@ -319,7 +319,7 @@ async fn associate_category_via_router() {
     let state = test_app_state(db.pool.clone());
     let router = app(state);
 
-    let body = serde_json::json!({ "category_id": cat_id });
+    let body = serde_json::json!({ "category_id": cat_id.value() });
     let resp = router
         .clone()
         .oneshot(authed_json_request(
@@ -357,7 +357,7 @@ async fn disassociate_category_via_router() {
     // Associate first
     sqlx::query("INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)")
         .bind(brand_uuid)
-        .bind(cat_id)
+        .bind(cat_id.value())
         .execute(&db.pool)
         .await
         .unwrap();

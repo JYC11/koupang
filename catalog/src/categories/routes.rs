@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::categories::dtos::{CategoryRes, CreateCategoryReq, UpdateCategoryReq};
+use crate::categories::value_objects::CategoryId;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;
@@ -50,6 +51,7 @@ async fn get_category(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CategoryRes>, AppError> {
+    let id = CategoryId::new(id);
     let category = app_state.category_service.get_category(id).await?;
     Ok(Json(category))
 }
@@ -69,6 +71,7 @@ async fn get_children(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    let id = CategoryId::new(id);
     let children = app_state.category_service.get_children(id).await?;
     Ok(Json(children))
 }
@@ -77,6 +80,7 @@ async fn get_subtree(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    let id = CategoryId::new(id);
     let subtree = app_state.category_service.get_subtree(id).await?;
     Ok(Json(subtree))
 }
@@ -85,6 +89,7 @@ async fn get_ancestors(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    let id = CategoryId::new(id);
     let ancestors = app_state.category_service.get_ancestors(id).await?;
     Ok(Json(ancestors))
 }
@@ -107,6 +112,7 @@ async fn update_category(
     current_user: CurrentUser,
     Json(req): Json<UpdateCategoryReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = CategoryId::new(id);
     app_state
         .category_service
         .update_category(&current_user, id, req)
@@ -122,6 +128,7 @@ async fn delete_category(
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = CategoryId::new(id);
     app_state
         .category_service
         .delete_category(&current_user, id)

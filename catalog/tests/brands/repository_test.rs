@@ -1,7 +1,7 @@
 use crate::common::{create_test_category, test_db};
 use catalog::brands::dtos::{ValidCreateBrandReq, ValidUpdateBrandReq};
 use catalog::brands::repository;
-use catalog::brands::value_objects::BrandName;
+use catalog::brands::value_objects::{BrandId, BrandName};
 use catalog::common::value_objects::{HttpUrl, Slug};
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ async fn create_and_get_brand() {
         .await
         .unwrap();
 
-    assert_eq!(brand.id, brand_id);
+    assert_eq!(brand.id, brand_id.value());
     assert_eq!(brand.name, "Acme Corp");
     assert_eq!(brand.slug, "acme-corp");
     assert_eq!(brand.description.as_deref(), Some("Acme Corp description"));
@@ -56,7 +56,7 @@ async fn get_brand_by_slug() {
 #[tokio::test]
 async fn get_nonexistent_brand_returns_error() {
     let db = test_db().await;
-    let result = repository::get_brand_by_id(&db.pool, Uuid::new_v4()).await;
+    let result = repository::get_brand_by_id(&db.pool, BrandId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -207,7 +207,7 @@ async fn update_nonexistent_brand_returns_error() {
         description: None,
         logo_url: None,
     };
-    let result = repository::update_brand(&mut *conn, Uuid::new_v4(), update).await;
+    let result = repository::update_brand(&mut *conn, BrandId::new(Uuid::new_v4()), update).await;
     assert!(result.is_err());
 }
 
@@ -233,7 +233,7 @@ async fn delete_brand() {
 async fn delete_nonexistent_brand_returns_error() {
     let db = test_db().await;
     let mut conn = db.pool.acquire().await.unwrap();
-    let result = repository::delete_brand(&mut *conn, Uuid::new_v4()).await;
+    let result = repository::delete_brand(&mut *conn, BrandId::new(Uuid::new_v4())).await;
     assert!(result.is_err());
 }
 
@@ -272,7 +272,7 @@ async fn associate_and_list_categories() {
         .unwrap();
 
     assert_eq!(categories.len(), 1);
-    assert_eq!(categories[0].id, cat_id);
+    assert_eq!(categories[0].id, cat_id.value());
 }
 
 #[tokio::test]

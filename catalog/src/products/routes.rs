@@ -12,6 +12,7 @@ use crate::products::dtos::{
     AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
     ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
 };
+use crate::products::value_objects::{ProductId, SkuId};
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;
@@ -62,6 +63,7 @@ async fn get_product_detail(
     State(app_state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProductDetailRes>, AppError> {
+    let id = ProductId::new(id);
     let detail = app_state.service.get_product_detail(id).await?;
     Ok(Json(detail))
 }
@@ -100,6 +102,7 @@ async fn update_product(
     current_user: CurrentUser,
     Json(req): Json<UpdateProductReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = ProductId::new(id);
     app_state
         .service
         .update_product(&current_user, id, req)
@@ -115,6 +118,7 @@ async fn delete_product(
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let id = ProductId::new(id);
     app_state.service.delete_product(&current_user, id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
@@ -128,6 +132,7 @@ async fn list_skus(
     State(app_state): State<AppState>,
     Path(product_id): Path<Uuid>,
 ) -> Result<Json<Vec<SkuRes>>, AppError> {
+    let product_id = ProductId::new(product_id);
     let skus = app_state.service.list_skus(product_id).await?;
     Ok(Json(skus))
 }
@@ -138,6 +143,7 @@ async fn create_sku(
     current_user: CurrentUser,
     Json(req): Json<CreateSkuReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let product_id = ProductId::new(product_id);
     let sku = app_state
         .service
         .create_sku(&current_user, product_id, req)
@@ -151,6 +157,7 @@ async fn update_sku(
     current_user: CurrentUser,
     Json(req): Json<UpdateSkuReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let sku_id = SkuId::new(sku_id);
     app_state
         .service
         .update_sku(&current_user, sku_id, req)
@@ -166,6 +173,7 @@ async fn delete_sku(
     Path(sku_id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let sku_id = SkuId::new(sku_id);
     app_state.service.delete_sku(&current_user, sku_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
@@ -184,6 +192,7 @@ async fn adjust_stock(
     current_user: CurrentUser,
     Json(req): Json<AdjustStockReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let sku_id = SkuId::new(sku_id);
     app_state
         .service
         .adjust_stock(&current_user, sku_id, req.delta)
@@ -200,6 +209,7 @@ async fn list_images(
     State(app_state): State<AppState>,
     Path(product_id): Path<Uuid>,
 ) -> Result<Json<Vec<ProductImageRes>>, AppError> {
+    let product_id = ProductId::new(product_id);
     let images = app_state.service.list_images(product_id).await?;
     Ok(Json(images))
 }
@@ -210,6 +220,7 @@ async fn add_image(
     current_user: CurrentUser,
     Json(req): Json<AddProductImageReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    let product_id = ProductId::new(product_id);
     let image = app_state
         .service
         .add_image(&current_user, product_id, req)
@@ -222,6 +233,7 @@ async fn delete_image(
     Path((product_id, image_id)): Path<(Uuid, Uuid)>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
+    let product_id = ProductId::new(product_id);
     app_state
         .service
         .delete_image(&current_user, product_id, image_id)

@@ -1,11 +1,7 @@
-// Re-export HttpUrl for logo URL validation
 pub use crate::common::value_objects::HttpUrl;
 
-// ── BrandName (via macro) ─────────────────────────────────
-
-crate::validated_name!(BrandName, "Brand name", 255);
-
-// ── Tests ─────────────────────────────────────────────────
+shared::validated_name!(BrandName, "Brand name", 255);
+shared::valid_id!(BrandId);
 
 #[cfg(test)]
 mod tests {

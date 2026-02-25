@@ -1,8 +1,11 @@
+use crate::brands::value_objects::BrandId;
+use crate::categories::value_objects::CategoryId;
 use crate::products::dtos::{
     ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq,
     ValidUpdateSkuReq,
 };
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
+use crate::products::value_objects::{ProductId, SkuId};
 use shared::db::PgExec;
 use shared::errors::AppError;
 use sqlx::PgConnection;
@@ -20,14 +23,14 @@ const PRODUCT_SELECT: &str = "\
 
 pub async fn get_product_by_id<'e>(
     executor: impl PgExec<'e>,
-    id: Uuid,
+    id: ProductId,
 ) -> Result<ProductEntity, AppError> {
     let sql = format!(
         "{} WHERE p.id = $1 AND p.deleted_at IS NULL",
         PRODUCT_SELECT
     );
     sqlx::query_as::<_, ProductEntity>(&sql)
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("Product not found: {}", e)))
@@ -78,18 +81,21 @@ pub async fn list_active_products<'e>(
 
 // ── FK validation helpers ───────────────────────────────────
 
-pub async fn category_exists<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<bool, AppError> {
+pub async fn category_exists<'e>(
+    executor: impl PgExec<'e>,
+    id: CategoryId,
+) -> Result<bool, AppError> {
     let row: (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1)")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to check category: {}", e)))?;
     Ok(row.0)
 }
 
-pub async fn brand_exists<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<bool, AppError> {
+pub async fn brand_exists<'e>(executor: impl PgExec<'e>, id: BrandId) -> Result<bool, AppError> {
     let row: (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM brands WHERE id = $1)")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to check brand: {}", e)))?;
@@ -98,14 +104,14 @@ pub async fn brand_exists<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<boo
 
 pub async fn is_brand_in_category<'e>(
     executor: impl PgExec<'e>,
-    brand_id: Uuid,
-    category_id: Uuid,
+    brand_id: BrandId,
+    category_id: CategoryId,
 ) -> Result<bool, AppError> {
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS(SELECT 1 FROM brand_categories WHERE brand_id = $1 AND category_id = $2)",
     )
-    .bind(brand_id)
-    .bind(category_id)
+    .bind(brand_id.value())
+    .bind(category_id.value())
     .fetch_one(executor)
     .await
     .map_err(|e| {
@@ -120,7 +126,7 @@ pub async fn create_product(
     tx: &mut PgConnection,
     seller_id: Uuid,
     req: ValidCreateProductReq,
-) -> Result<Uuid, AppError> {
+) -> Result<ProductId, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO products (seller_id, name, slug, description, base_price, currency, category_id, brand_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -132,18 +138,18 @@ pub async fn create_product(
         .bind(&req.description)
         .bind(req.base_price.value())
         .bind(req.currency.as_str())
-        .bind(&req.category_id)
-        .bind(&req.brand_id)
+        .bind(req.category_id.map(|id| id.value()))
+        .bind(req.brand_id.map(|id| id.value()))
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to create product: {}", e)))?;
 
-    Ok(row.0)
+    Ok(ProductId::new(row.0))
 }
 
 pub async fn update_product(
     tx: &mut PgConnection,
-    id: Uuid,
+    id: ProductId,
     req: ValidUpdateProductReq,
 ) -> Result<(), AppError> {
     // Build dynamic SET clause for partial updates
@@ -195,7 +201,7 @@ pub async fn update_product(
         set_parts.join(", ")
     );
 
-    let mut query = sqlx::query(&sql).bind(id);
+    let mut query = sqlx::query(&sql).bind(id.value());
 
     if let Some(ref name) = req.name {
         query = query.bind(name.as_str());
@@ -213,10 +219,10 @@ pub async fn update_product(
         query = query.bind(currency.as_str());
     }
     if let Some(ref category_id) = req.category_id {
-        query = query.bind(category_id);
+        query = query.bind(category_id.value());
     }
     if let Some(ref brand_id) = req.brand_id {
-        query = query.bind(brand_id);
+        query = query.bind(brand_id.value());
     }
     if let Some(ref status) = req.status {
         query = query.bind(status.as_str());
@@ -234,10 +240,10 @@ pub async fn update_product(
     Ok(())
 }
 
-pub async fn delete_product(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_product(tx: &mut PgConnection, id: ProductId) -> Result<(), AppError> {
     let result =
         sqlx::query("UPDATE products SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
+            .bind(id.value())
             .execute(&mut *tx)
             .await
             .map_err(|e| {
@@ -253,9 +259,12 @@ pub async fn delete_product(tx: &mut PgConnection, id: Uuid) -> Result<(), AppEr
 
 // ── SKU queries ─────────────────────────────────────────────
 
-pub async fn get_sku_by_id<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<SkuEntity, AppError> {
+pub async fn get_sku_by_id<'e>(
+    executor: impl PgExec<'e>,
+    id: SkuId,
+) -> Result<SkuEntity, AppError> {
     sqlx::query_as::<_, SkuEntity>("SELECT * FROM skus WHERE id = $1 AND deleted_at IS NULL")
-        .bind(id)
+        .bind(id.value())
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("SKU not found: {}", e)))
@@ -263,12 +272,12 @@ pub async fn get_sku_by_id<'e>(executor: impl PgExec<'e>, id: Uuid) -> Result<Sk
 
 pub async fn list_skus_by_product<'e>(
     executor: impl PgExec<'e>,
-    product_id: Uuid,
+    product_id: ProductId,
 ) -> Result<Vec<SkuEntity>, AppError> {
     sqlx::query_as::<_, SkuEntity>(
         "SELECT * FROM skus WHERE product_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC",
     )
-    .bind(product_id)
+    .bind(product_id.value())
     .fetch_all(executor)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to list SKUs: {}", e)))
@@ -276,15 +285,15 @@ pub async fn list_skus_by_product<'e>(
 
 pub async fn create_sku(
     tx: &mut PgConnection,
-    product_id: Uuid,
+    product_id: ProductId,
     req: ValidCreateSkuReq,
-) -> Result<Uuid, AppError> {
+) -> Result<SkuId, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO skus (product_id, sku_code, price, stock_quantity, attributes)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id",
     )
-    .bind(product_id)
+    .bind(product_id.value())
     .bind(req.sku_code.as_str())
     .bind(req.price.value())
     .bind(req.stock_quantity.value())
@@ -293,12 +302,12 @@ pub async fn create_sku(
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
 
-    Ok(row.0)
+    Ok(SkuId::new(row.0))
 }
 
 pub async fn update_sku(
     tx: &mut PgConnection,
-    id: Uuid,
+    id: SkuId,
     req: ValidUpdateSkuReq,
 ) -> Result<(), AppError> {
     let mut set_parts: Vec<String> = Vec::new();
@@ -333,7 +342,7 @@ pub async fn update_sku(
         set_parts.join(", ")
     );
 
-    let mut query = sqlx::query(&sql).bind(id);
+    let mut query = sqlx::query(&sql).bind(id.value());
 
     if let Some(ref price) = req.price {
         query = query.bind(price.value());
@@ -360,10 +369,10 @@ pub async fn update_sku(
     Ok(())
 }
 
-pub async fn delete_sku(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_sku(tx: &mut PgConnection, id: SkuId) -> Result<(), AppError> {
     let result =
         sqlx::query("UPDATE skus SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
+            .bind(id.value())
             .execute(&mut *tx)
             .await
             .map_err(|e| AppError::InternalServerError(format!("Failed to delete SKU: {}", e)))?;
@@ -377,13 +386,17 @@ pub async fn delete_sku(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError>
 
 // ── Stock operations ────────────────────────────────────────
 
-pub async fn adjust_stock(tx: &mut PgConnection, sku_id: Uuid, delta: i32) -> Result<(), AppError> {
+pub async fn adjust_stock(
+    tx: &mut PgConnection,
+    sku_id: SkuId,
+    delta: i32,
+) -> Result<(), AppError> {
     let result = sqlx::query(
         "UPDATE skus SET stock_quantity = stock_quantity + $1, updated_at = NOW()
          WHERE id = $2 AND deleted_at IS NULL AND stock_quantity + $1 >= 0",
     )
     .bind(delta)
-    .bind(sku_id)
+    .bind(sku_id.value())
     .execute(&mut *tx)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
@@ -401,12 +414,12 @@ pub async fn adjust_stock(tx: &mut PgConnection, sku_id: Uuid, delta: i32) -> Re
 
 pub async fn list_images_by_product<'e>(
     executor: impl PgExec<'e>,
-    product_id: Uuid,
+    product_id: ProductId,
 ) -> Result<Vec<ProductImageEntity>, AppError> {
     sqlx::query_as::<_, ProductImageEntity>(
         "SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC",
     )
-    .bind(product_id)
+    .bind(product_id.value())
     .fetch_all(executor)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to list images: {}", e)))
@@ -414,13 +427,13 @@ pub async fn list_images_by_product<'e>(
 
 pub async fn add_product_image(
     tx: &mut PgConnection,
-    product_id: Uuid,
+    product_id: ProductId,
     req: ValidAddProductImageReq,
 ) -> Result<Uuid, AppError> {
     // If this image is primary, unset any existing primary
     if req.is_primary {
         sqlx::query("UPDATE product_images SET is_primary = FALSE WHERE product_id = $1 AND is_primary = TRUE")
-            .bind(product_id)
+            .bind(product_id.value())
             .execute(&mut *tx)
             .await
             .map_err(|e| AppError::InternalServerError(format!("Failed to unset primary image: {}", e)))?;
@@ -431,7 +444,7 @@ pub async fn add_product_image(
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id",
     )
-    .bind(product_id)
+    .bind(product_id.value())
     .bind(req.url.as_str())
     .bind(&req.alt_text)
     .bind(req.sort_order)
