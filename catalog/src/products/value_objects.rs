@@ -20,6 +20,7 @@ static SKU_CODE_RE: Lazy<Regex> =
 shared::validated_name!(ProductName, "Product name", 500);
 shared::valid_id!(ProductId);
 shared::valid_id!(SkuId);
+shared::valid_id!(ProductImageId);
 
 // ── Price ───────────────────────────────────────────────────
 

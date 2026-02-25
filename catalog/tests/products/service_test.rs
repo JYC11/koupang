@@ -5,7 +5,7 @@ use crate::common::{
     test_db,
 };
 use catalog::products::dtos::UpdateProductReq;
-use catalog::products::value_objects::{ProductId, ProductStatus, SkuId};
+use catalog::products::value_objects::{ProductId, ProductImageId, ProductStatus, SkuId};
 
 // ── Product service tests ───────────────────────────────────
 
@@ -272,7 +272,7 @@ async fn add_and_delete_image() {
     let images = service.list_images(product_id).await.unwrap();
     assert_eq!(images.len(), 1);
 
-    let image_id = uuid::Uuid::parse_str(&image.id).unwrap();
+    let image_id = ProductImageId::new(uuid::Uuid::parse_str(&image.id).unwrap());
     service
         .delete_image(&seller, product_id, image_id)
         .await

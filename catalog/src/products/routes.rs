@@ -12,7 +12,7 @@ use crate::products::dtos::{
     AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
     ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
 };
-use crate::products::value_objects::{ProductId, SkuId};
+use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
 use shared::errors::AppError;
@@ -234,6 +234,7 @@ async fn delete_image(
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let product_id = ProductId::new(product_id);
+    let image_id = ProductImageId::new(image_id);
     app_state
         .service
         .delete_image(&current_user, product_id, image_id)

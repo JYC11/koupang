@@ -5,7 +5,7 @@ use crate::products::dtos::{
     ValidUpdateSkuReq,
 };
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
-use crate::products::value_objects::{ProductId, SkuId};
+use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::db::PgExec;
 use shared::errors::AppError;
 use sqlx::PgConnection;
@@ -429,7 +429,7 @@ pub async fn add_product_image(
     tx: &mut PgConnection,
     product_id: ProductId,
     req: ValidAddProductImageReq,
-) -> Result<Uuid, AppError> {
+) -> Result<ProductImageId, AppError> {
     // If this image is primary, unset any existing primary
     if req.is_primary {
         sqlx::query("UPDATE product_images SET is_primary = FALSE WHERE product_id = $1 AND is_primary = TRUE")
@@ -453,12 +453,15 @@ pub async fn add_product_image(
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
 
-    Ok(row.0)
+    Ok(ProductImageId::new(row.0))
 }
 
-pub async fn delete_product_image(tx: &mut PgConnection, id: Uuid) -> Result<(), AppError> {
+pub async fn delete_product_image(
+    tx: &mut PgConnection,
+    id: ProductImageId,
+) -> Result<(), AppError> {
     let result = sqlx::query("DELETE FROM product_images WHERE id = $1")
-        .bind(id)
+        .bind(id.value())
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete image: {}", e)))?;

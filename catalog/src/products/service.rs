@@ -4,7 +4,7 @@ use crate::products::dtos::{
     ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq, ValidUpdateSkuReq,
 };
 use crate::products::repository;
-use crate::products::value_objects::{ProductId, SkuId};
+use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::auth::guards::require_access;
 use shared::auth::jwt::CurrentUser;
 use shared::db::PgPool;
@@ -265,7 +265,7 @@ impl CatalogService {
         let images = repository::list_images_by_product(&self.pool, product_id).await?;
         let image = images
             .into_iter()
-            .find(|img| img.id == image_id)
+            .find(|img| img.id == image_id.value())
             .ok_or_else(|| {
                 AppError::InternalServerError("Image not found after insert".to_string())
             })?;
@@ -277,7 +277,7 @@ impl CatalogService {
         &self,
         current_user: &CurrentUser,
         product_id: ProductId,
-        image_id: Uuid,
+        image_id: ProductImageId,
     ) -> Result<(), AppError> {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
         require_access(current_user, &product.seller_id)?;
