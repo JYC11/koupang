@@ -2,23 +2,29 @@ use crate::common::{
     associate_brand_category, create_test_brand, create_test_category, sample_add_image_req,
     sample_create_product_req, sample_create_product_with_fks, sample_create_sku_req, test_db,
 };
-use catalog::products::dtos::ValidatedCreateProduct;
 use catalog::products::dtos::{ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq};
 use catalog::products::repository;
+use catalog::products::value_objects::{Currency, Price, ProductName, Slug};
 use uuid::Uuid;
 
+/// VO-validate a CreateProductReq into a ValidatedCreateProduct, bypassing FK checks for repo tests.
 fn validated_product(req: catalog::products::dtos::CreateProductReq) -> ValidCreateProductReq {
-    req.try_into().expect("sample data should be valid")
-}
-
-/// Wrap a VO-validated product into a domain-validated one (skipping FK checks for tests with no FKs).
-fn domain_product(req: ValidCreateProductReq) -> ValidatedCreateProduct {
-    ValidatedCreateProduct {
-        name: req.name,
-        slug: req.slug,
+    let name = ProductName::new(&req.name).expect("sample name should be valid");
+    let slug = match req.slug {
+        Some(s) => Slug::new(&s).expect("sample slug should be valid"),
+        None => Slug::from_name(name.as_str()).expect("slug from name should be valid"),
+    };
+    let base_price = Price::new(req.base_price).expect("sample price should be valid");
+    let currency = match req.currency {
+        Some(c) => Currency::new(&c).expect("sample currency should be valid"),
+        None => Currency::default(),
+    };
+    ValidCreateProductReq {
+        name,
+        slug,
         description: req.description,
-        base_price: req.base_price,
-        currency: req.currency,
+        base_price,
+        currency,
         category_id: req.category_id,
         brand_id: req.brand_id,
     }
@@ -38,7 +44,7 @@ fn validated_image(req: catalog::products::dtos::AddProductImageReq) -> ValidAdd
 async fn create_and_get_product() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let validated = domain_product(validated_product(sample_create_product_req()));
+    let validated = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, validated)
@@ -59,7 +65,7 @@ async fn create_and_get_product() {
 async fn get_product_by_slug() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let validated = domain_product(validated_product(sample_create_product_req()));
+    let validated = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     repository::create_product(&mut *conn, seller_id, validated)
@@ -86,14 +92,14 @@ async fn list_products_by_seller() {
     let seller_id = Uuid::new_v4();
 
     let mut conn = db.pool.acquire().await.unwrap();
-    let v1 = domain_product(validated_product(sample_create_product_req()));
+    let v1 = validated_product(sample_create_product_req());
     repository::create_product(&mut *conn, seller_id, v1)
         .await
         .unwrap();
 
     let mut req2 = crate::common::sample_create_product_req_2();
     req2.slug = Some("second-product".to_string());
-    let v2 = domain_product(validated_product(req2));
+    let v2 = validated_product(req2);
     repository::create_product(&mut *conn, seller_id, v2)
         .await
         .unwrap();
@@ -109,7 +115,7 @@ async fn list_products_by_seller() {
 async fn delete_product_soft_deletes() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let validated = domain_product(validated_product(sample_create_product_req()));
+    let validated = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, validated)
@@ -131,7 +137,7 @@ async fn delete_product_soft_deletes() {
 async fn create_and_list_skus() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let vp = domain_product(validated_product(sample_create_product_req()));
+    let vp = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, vp)
@@ -157,7 +163,7 @@ async fn create_and_list_skus() {
 async fn adjust_stock_increases_and_decreases() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let vp = domain_product(validated_product(sample_create_product_req()));
+    let vp = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, vp)
@@ -188,7 +194,7 @@ async fn adjust_stock_increases_and_decreases() {
 async fn adjust_stock_rejects_going_negative() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let vp = domain_product(validated_product(sample_create_product_req()));
+    let vp = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, vp)
@@ -211,7 +217,7 @@ async fn adjust_stock_rejects_going_negative() {
 async fn add_and_list_images() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let vp = domain_product(validated_product(sample_create_product_req()));
+    let vp = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, vp)
@@ -235,7 +241,7 @@ async fn add_and_list_images() {
 async fn delete_image() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let vp = domain_product(validated_product(sample_create_product_req()));
+    let vp = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, vp)
@@ -330,8 +336,7 @@ async fn get_product_by_id_includes_joined_fields() {
     let brand_id = create_test_brand(&db.pool).await;
     associate_brand_category(&db.pool, brand_id, cat_id).await;
 
-    let vo = validated_product(sample_create_product_with_fks(Some(cat_id), Some(brand_id)));
-    let dp = domain_product(vo);
+    let dp = validated_product(sample_create_product_with_fks(Some(cat_id), Some(brand_id)));
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, dp)
@@ -352,7 +357,7 @@ async fn get_product_by_id_includes_joined_fields() {
 async fn get_product_by_id_returns_none_fields_when_no_fks() {
     let db = test_db().await;
     let seller_id = Uuid::new_v4();
-    let validated = domain_product(validated_product(sample_create_product_req()));
+    let validated = validated_product(sample_create_product_req());
 
     let mut conn = db.pool.acquire().await.unwrap();
     let product_id = repository::create_product(&mut *conn, seller_id, validated)

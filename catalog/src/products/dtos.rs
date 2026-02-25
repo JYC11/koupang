@@ -171,7 +171,12 @@ pub struct ProductDetailRes {
 
 // ── Validated DTOs ──────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+/// Fully validated product for creation.
+/// Enforces both value-object validation and FK referential integrity:
+/// - All fields are validated value objects (name, slug, price, currency)
+/// - category_id references an existing category (if set)
+/// - brand_id references an existing brand (if set)
+/// - brand is associated with category via brand_categories (if both set)
 pub struct ValidCreateProductReq {
     pub name: ProductName,
     pub slug: Slug,
@@ -182,34 +187,34 @@ pub struct ValidCreateProductReq {
     pub brand_id: Option<Uuid>,
 }
 
-impl TryFrom<CreateProductReq> for ValidCreateProductReq {
-    type Error = AppError;
-
-    fn try_from(req: CreateProductReq) -> Result<Self, Self::Error> {
+impl ValidCreateProductReq {
+    pub async fn new(pool: &PgPool, req: CreateProductReq) -> Result<Self, AppError> {
         let name = ProductName::new(&req.name)?;
         let slug = match req.slug {
             Some(s) => Slug::new(&s)?,
             None => Slug::from_name(name.as_str())?,
         };
-        let base_price = Price::new(req.base_price)?;
-        let currency = match req.currency {
-            Some(c) => Currency::new(&c)?,
-            None => Currency::default(),
-        };
+
+        validate_fk_references(pool, req.category_id, req.brand_id).await?;
 
         Ok(Self {
             name,
             slug,
             description: req.description,
-            base_price,
-            currency,
+            base_price: Price::new(req.base_price)?,
+            currency: match req.currency {
+                Some(c) => Currency::new(&c)?,
+                None => Currency::default(),
+            },
             category_id: req.category_id,
             brand_id: req.brand_id,
         })
     }
 }
 
-#[derive(Debug, Clone)]
+/// Fully validated product update.
+/// Enforces value-object validation on provided fields, then validates
+/// effective FK state (new values merged with existing product).
 pub struct ValidUpdateProductReq {
     pub name: Option<ProductName>,
     pub slug: Option<Slug>,
@@ -221,75 +226,10 @@ pub struct ValidUpdateProductReq {
     pub status: Option<ProductStatus>,
 }
 
-impl TryFrom<UpdateProductReq> for ValidUpdateProductReq {
-    type Error = AppError;
-
-    fn try_from(req: UpdateProductReq) -> Result<Self, Self::Error> {
-        let name = req.name.map(|n| ProductName::new(&n)).transpose()?;
-        let slug = req.slug.map(|s| Slug::new(&s)).transpose()?;
-        let base_price = req.base_price.map(Price::new).transpose()?;
-        let currency = req.currency.map(|c| Currency::new(&c)).transpose()?;
-
-        Ok(Self {
-            name,
-            slug,
-            description: req.description,
-            base_price,
-            currency,
-            category_id: req.category_id,
-            brand_id: req.brand_id,
-            status: req.status,
-        })
-    }
-}
-
-/// Fully validated product for creation.
-/// Can only be constructed via `new()` which enforces:
-/// - category_id references an existing category (if set)
-/// - brand_id references an existing brand (if set)
-/// - brand is associated with category via brand_categories (if both set)
-pub struct ValidatedCreateProduct {
-    pub name: ProductName,
-    pub slug: Slug,
-    pub description: Option<String>,
-    pub base_price: Price,
-    pub currency: Currency,
-    pub category_id: Option<Uuid>,
-    pub brand_id: Option<Uuid>,
-}
-
-impl ValidatedCreateProduct {
-    pub async fn new(pool: &PgPool, req: ValidCreateProductReq) -> Result<Self, AppError> {
-        validate_fk_references(pool, req.category_id, req.brand_id).await?;
-        Ok(Self {
-            name: req.name,
-            slug: req.slug,
-            description: req.description,
-            base_price: req.base_price,
-            currency: req.currency,
-            category_id: req.category_id,
-            brand_id: req.brand_id,
-        })
-    }
-}
-
-/// Fully validated product update.
-/// Validates effective FK state (new values merged with existing product).
-pub struct ValidatedUpdateProduct {
-    pub name: Option<ProductName>,
-    pub slug: Option<Slug>,
-    pub description: Option<String>,
-    pub base_price: Option<Price>,
-    pub currency: Option<Currency>,
-    pub category_id: Option<Uuid>,
-    pub brand_id: Option<Uuid>,
-    pub status: Option<ProductStatus>,
-}
-
-impl ValidatedUpdateProduct {
+impl ValidUpdateProductReq {
     pub async fn new(
         pool: &PgPool,
-        req: ValidUpdateProductReq,
+        req: UpdateProductReq,
         existing: &ProductEntity,
     ) -> Result<Self, AppError> {
         // Merge: use updated value if present, else keep existing
@@ -297,13 +237,13 @@ impl ValidatedUpdateProduct {
         let effective_brand = req.brand_id.or(existing.brand_id);
         validate_fk_references(pool, effective_category, effective_brand).await?;
         Ok(Self {
-            name: req.name,
-            slug: req.slug,
+            name: req.name.map(|n| ProductName::new(&n)).transpose()?,
+            slug: req.slug.map(|s| Slug::new(&s)).transpose()?,
             description: req.description,
-            base_price: req.base_price,
-            currency: req.currency,
-            category_id: req.category_id,
-            brand_id: req.brand_id,
+            base_price: req.base_price.map(Price::new).transpose()?,
+            currency: req.currency.map(|c| Currency::new(&c)).transpose()?,
+            category_id: effective_category,
+            brand_id: effective_brand,
             status: req.status,
         })
     }

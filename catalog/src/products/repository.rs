@@ -1,6 +1,6 @@
 use crate::products::dtos::{
-    ValidAddProductImageReq, ValidCreateSkuReq, ValidUpdateSkuReq, ValidatedCreateProduct,
-    ValidatedUpdateProduct,
+    ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq,
+    ValidUpdateSkuReq,
 };
 use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
 use shared::db::PgExec;
@@ -119,7 +119,7 @@ pub async fn is_brand_in_category<'e>(
 pub async fn create_product(
     tx: &mut PgConnection,
     seller_id: Uuid,
-    req: ValidatedCreateProduct,
+    req: ValidCreateProductReq,
 ) -> Result<Uuid, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO products (seller_id, name, slug, description, base_price, currency, category_id, brand_id)
@@ -144,7 +144,7 @@ pub async fn create_product(
 pub async fn update_product(
     tx: &mut PgConnection,
     id: Uuid,
-    req: ValidatedUpdateProduct,
+    req: ValidUpdateProductReq,
 ) -> Result<(), AppError> {
     // Build dynamic SET clause for partial updates
     let mut set_parts: Vec<String> = Vec::new();

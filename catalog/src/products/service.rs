@@ -2,7 +2,6 @@ use crate::products::dtos::{
     AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
     ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq, ValidAddProductImageReq,
     ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq, ValidUpdateSkuReq,
-    ValidatedCreateProduct, ValidatedUpdateProduct,
 };
 use crate::products::repository;
 use shared::auth::guards::require_access;
@@ -28,8 +27,7 @@ impl CatalogService {
         current_user: &CurrentUser,
         req: CreateProductReq,
     ) -> Result<ProductRes, AppError> {
-        let vo_validated: ValidCreateProductReq = req.try_into()?;
-        let validated = ValidatedCreateProduct::new(&self.pool, vo_validated).await?;
+        let validated = ValidCreateProductReq::new(&self.pool, req).await?;
         let seller_id = current_user.id;
 
         let product_id = with_transaction(&self.pool, |tx| {
@@ -90,8 +88,7 @@ impl CatalogService {
         let product = repository::get_product_by_id(&self.pool, product_id).await?;
         require_access(current_user, &product.seller_id)?;
 
-        let vo_validated: ValidUpdateProductReq = req.try_into()?;
-        let validated = ValidatedUpdateProduct::new(&self.pool, vo_validated, &product).await?;
+        let validated = ValidUpdateProductReq::new(&self.pool, req, &product).await?;
 
         with_transaction(&self.pool, |tx| {
             Box::pin(async move {
