@@ -1,61 +1,14 @@
 use crate::common::{
-    create_test_category_named, create_test_child_category, test_app_state, test_auth_config,
-    test_db,
+    admin, create_test_category_named, create_test_child_category, seller, test_app_state, test_db,
+    test_token,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::categories::dtos::{CategoryRes, CreateCategoryReq};
-use shared::auth::Role;
-use shared::auth::jwt::{CurrentUser, JwtService};
-use shared::test_utils::http::{body_bytes, body_json};
+use shared::test_utils::http::{authed_delete, authed_json_request, body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
-
-fn test_token(user: &CurrentUser) -> String {
-    let jwt_service = JwtService::new(test_auth_config());
-    jwt_service
-        .generate_access_token(&user.id, "testuser", user.role.clone())
-        .unwrap()
-}
-
-fn admin() -> CurrentUser {
-    CurrentUser {
-        id: Uuid::new_v4(),
-        role: Role::Admin,
-    }
-}
-
-fn seller() -> CurrentUser {
-    CurrentUser {
-        id: Uuid::new_v4(),
-        role: Role::Seller,
-    }
-}
-
-fn authed_json_request(
-    method: &str,
-    uri: &str,
-    token: &str,
-    body: &impl serde::Serialize,
-) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method(method)
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", token))
-        .body(Body::from(serde_json::to_string(body).unwrap()))
-        .unwrap()
-}
-
-fn authed_delete(uri: &str, token: &str) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method("DELETE")
-        .header("authorization", format!("Bearer {}", token))
-        .body(Body::empty())
-        .unwrap()
-}
 
 /// Helper: create a category via router, returns CategoryRes
 async fn create_category_via_router(pool: &shared::db::PgPool) -> (CategoryRes, String) {

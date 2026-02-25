@@ -6,7 +6,7 @@ use crate::common::{
 };
 use catalog::products::dtos::{ProductFilter, UpdateProductReq};
 use catalog::products::value_objects::{ProductId, ProductImageId, ProductStatus, SkuId};
-use shared::db::pagination_support::{PaginationDirection, PaginationParams};
+use shared::db::pagination_support::PaginationParams;
 
 // ── Product service tests ───────────────────────────────────
 
@@ -76,11 +76,7 @@ async fn get_product_detail_includes_skus_and_images() {
 }
 
 fn default_params() -> PaginationParams {
-    PaginationParams {
-        limit: 20,
-        cursor: None,
-        direction: PaginationDirection::Forward,
-    }
+    PaginationParams::default()
 }
 
 fn default_filter() -> ProductFilter {

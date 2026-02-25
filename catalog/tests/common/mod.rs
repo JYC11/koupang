@@ -6,24 +6,18 @@ use catalog::categories::value_objects::CategoryId;
 use catalog::products::dtos::{AddProductImageReq, CreateProductReq, CreateSkuReq};
 use catalog::products::service::CatalogService;
 use rust_decimal::Decimal;
-use shared::auth::Role;
-use shared::auth::jwt::CurrentUser;
-use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
+use shared::test_utils::auth::test_auth_config;
 use shared::test_utils::db::TestDb;
 use uuid::Uuid;
 
+// Re-export shared auth helpers so tests can import from `crate::common::*`
+pub use shared::test_utils::auth::{
+    admin_user, admin_user as admin, seller_user, seller_user as seller, test_token,
+};
+
 pub async fn test_db() -> TestDb {
     TestDb::start("./migrations").await
-}
-
-pub fn test_auth_config() -> AuthConfig {
-    AuthConfig {
-        access_token_secret: b"test-access-secret-key-for-testing".to_vec(),
-        refresh_token_secret: b"test-refresh-secret-key-for-testing".to_vec(),
-        access_token_expiry_secs: 3600,
-        refresh_token_expiry_secs: 7200,
-    }
 }
 
 pub fn test_catalog_service(pool: PgPool) -> CatalogService {
@@ -40,27 +34,6 @@ pub fn test_brand_service(pool: PgPool) -> BrandService {
 
 pub fn test_app_state(pool: PgPool) -> AppState {
     AppState::new_with_jwt(pool, test_auth_config())
-}
-
-pub fn seller_user() -> CurrentUser {
-    CurrentUser {
-        id: uuid::Uuid::new_v4(),
-        role: Role::Seller,
-    }
-}
-
-pub fn buyer_user() -> CurrentUser {
-    CurrentUser {
-        id: uuid::Uuid::new_v4(),
-        role: Role::Buyer,
-    }
-}
-
-pub fn admin_user() -> CurrentUser {
-    CurrentUser {
-        id: uuid::Uuid::new_v4(),
-        role: Role::Admin,
-    }
 }
 
 pub fn sample_create_product_req() -> CreateProductReq {

@@ -6,7 +6,7 @@ Products, pricing, inventory, categories (ltree hierarchy), and brands.
 
 - Layered: `routes` → `service` → `domain` → `repository` → DB
 - Rich domain models — all fields are value objects, constructed via `TryFrom<Entity>`
-- Validated DTOs — `ValidCreateProductReq::new(pool, req)` does VO + async FK validation in one step
+- Validated DTOs — `ValidCreateProductReq::new(pool, req)` does VO construction + async FK validation (delegates to `repository::validate_fk_references`)
 - Typed IDs via `shared::valid_id!`: `ProductId`, `SkuId`, `ProductImageId`, `CategoryId`, `BrandId`
 - Name VOs via `shared::validated_name!`: `ProductName(500)`, `CategoryName(255)`, `BrandName(255)`
 - Claims-based JWT auth, no gRPC (ADR-008)
@@ -74,10 +74,11 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 - **Category hierarchy:** Postgres ltree — subtree `<@`, ancestors `@>` (ADR-009)
 - **Soft deletes:** Products/SKUs via `deleted_at`; images hard-deleted; categories/brands hard-deleted with guards
 - **Partial updates:** Dynamic SQL (only provided fields)
-- **FK validation:** Validated DTOs enforce FK existence + brand-category association
+- **FK validation:** `repository::validate_fk_references(pool, category_id, brand_id)` — existence checks + brand-category association; called from validated DTOs
 - **LEFT JOINs:** Product reads JOIN categories/brands for names/slugs in responses
-- **List filters:** `ProductFilterQuery` → `(PaginationParams, ProductFilter)` via `into_parts()`; filters: `category_id`, `brand_id`, `min_price`, `max_price`, `search` (ILIKE), `status` (seller/me only)
-- **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + QueryBuilder
+- **Keyset pagination:** UUID v7-based cursor pagination via `shared::db::pagination_support`; `ProductFilterQuery` → `(PaginationParams, ProductFilter)` via `into_parts()`; supports `cursor`, `limit` (default 20, max 100), `direction` (forward/backward); returns `next_cursor` + `prev_cursor`
+- **List filters:** `category_id`, `brand_id`, `min_price`, `max_price`, `search` (ILIKE), `status` (seller/me only)
+- **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + `keyset_paginate()` via QueryBuilder
 
 ## Env Vars
 
@@ -85,7 +86,7 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 
 ## Tests
 
-58 unit + 149 integration = 207 tests. `make test SERVICE=catalog`
+58 unit + 151 integration = 209 tests. `make test SERVICE=catalog`
 
 ### Tips
 - ltree: `::ltree` cast on INSERT, `::text` cast on SELECT

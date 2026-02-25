@@ -9,7 +9,7 @@ use catalog::products::dtos::{
 };
 use catalog::products::repository;
 use catalog::products::value_objects::{Currency, Price, ProductId, ProductName, Slug};
-use shared::db::pagination_support::{PaginationDirection, PaginationParams};
+use shared::db::pagination_support::PaginationParams;
 use uuid::Uuid;
 
 /// VO-validate a CreateProductReq into a ValidatedCreateProduct, bypassing FK checks for repo tests.
@@ -44,11 +44,7 @@ fn validated_image(req: catalog::products::dtos::AddProductImageReq) -> ValidAdd
 }
 
 fn default_params() -> PaginationParams {
-    PaginationParams {
-        limit: 20,
-        cursor: None,
-        direction: PaginationDirection::Forward,
-    }
+    PaginationParams::default()
 }
 
 fn default_filter() -> ProductFilter {

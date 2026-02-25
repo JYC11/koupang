@@ -8,7 +8,7 @@
 |---------|--------|---------------|------------|------|
 | shared | Complete | Shared libraries | — | [shared/CLAUDE.md](shared/CLAUDE.md) |
 | identity | Complete (115 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog | Complete (207 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
+| catalog | Complete (209 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
 | order | Stub | Order lifecycle (state machine) | Orders, Order Items | — |
 | payment | Stub | Payment gateway, wallets | Transactions, Invoices | — |
 | shipping | Stub | Logistics, tracking | Shipments, Carriers | — |

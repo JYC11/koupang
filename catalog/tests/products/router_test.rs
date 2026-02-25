@@ -1,82 +1,19 @@
 use crate::common::{
-    associate_brand_category, create_test_brand_named, create_test_category_named,
-    sample_add_image_req, sample_create_product_req, sample_create_sku_req, test_app_state,
-    test_auth_config, test_db,
+    admin, associate_brand_category, create_test_brand_named, create_test_category_named,
+    sample_add_image_req, sample_create_product_req, sample_create_sku_req, seller, seller_user,
+    test_app_state, test_db, test_token,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::products::dtos::{CreateProductReq, ProductDetailRes, UpdateProductReq};
 use catalog::products::value_objects::{ProductId, ProductStatus};
-use shared::auth::Role;
-use shared::auth::jwt::{CurrentUser, JwtService};
-use shared::test_utils::http::{body_bytes, body_json};
+use shared::auth::jwt::CurrentUser;
+use shared::test_utils::http::{
+    authed_delete, authed_get, authed_json_request, body_bytes, body_json, json_request,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
-
-/// Generate a valid JWT access token for test requests.
-fn test_token(user: &CurrentUser) -> String {
-    let jwt_service = JwtService::new(test_auth_config());
-    jwt_service
-        .generate_access_token(&user.id, "testuser", user.role.clone())
-        .unwrap()
-}
-
-fn seller() -> CurrentUser {
-    CurrentUser {
-        id: Uuid::new_v4(),
-        role: Role::Seller,
-    }
-}
-
-fn admin() -> CurrentUser {
-    CurrentUser {
-        id: Uuid::new_v4(),
-        role: Role::Admin,
-    }
-}
-
-fn json_request(method: &str, uri: &str, body: &impl serde::Serialize) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method(method)
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(body).unwrap()))
-        .unwrap()
-}
-
-fn authed_json_request(
-    method: &str,
-    uri: &str,
-    token: &str,
-    body: &impl serde::Serialize,
-) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method(method)
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", token))
-        .body(Body::from(serde_json::to_string(body).unwrap()))
-        .unwrap()
-}
-
-fn authed_get(uri: &str, token: &str) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method("GET")
-        .header("authorization", format!("Bearer {}", token))
-        .body(Body::empty())
-        .unwrap()
-}
-
-fn authed_delete(uri: &str, token: &str) -> Request<Body> {
-    Request::builder()
-        .uri(uri)
-        .method("DELETE")
-        .header("authorization", format!("Bearer {}", token))
-        .body(Body::empty())
-        .unwrap()
-}
 
 /// Helper: create a product via router and return (product_id, seller, token)
 async fn create_test_product(pool: &shared::db::PgPool) -> (String, CurrentUser, String) {
@@ -393,7 +330,7 @@ async fn list_my_products_returns_only_owned() {
     // Create another product by a different seller
     let state = test_app_state(db.pool.clone());
     let router = app(state);
-    let other = crate::common::seller_user();
+    let other = seller_user();
     let other_token = test_token(&other);
     let mut req2 = crate::common::sample_create_product_req_2();
     req2.slug = Some("other-product".to_string());
@@ -588,7 +525,9 @@ async fn delete_image_via_router() {
     assert!(images.is_empty());
 }
 
-// ── Pagination tests ────────────────────────────────────────
+// ── Pagination integration test ─────────────────────────────
+// Cursor math is unit-tested in shared::db::pagination_support::tests.
+// This single test verifies the HTTP layer wires pagination correctly.
 
 /// Helper: create N active products for a seller, returns (seller, token)
 async fn create_n_active_products(pool: &shared::db::PgPool, n: usize) -> (CurrentUser, String) {
@@ -649,135 +588,6 @@ async fn pagination_limit_is_respected() {
     assert_eq!(items.len(), 2);
     assert!(body["next_cursor"].as_str().is_some());
     assert!(body["prev_cursor"].is_null());
-}
-
-#[tokio::test]
-async fn pagination_forward_with_cursor() {
-    let db = test_db().await;
-    create_n_active_products(&db.pool, 5).await;
-
-    let state = test_app_state(db.pool.clone());
-    let router = app(state);
-
-    // First page
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/products?limit=2")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_json(resp).await;
-    let first_page = body["items"].as_array().unwrap().clone();
-    let next_cursor = body["next_cursor"].as_str().unwrap();
-
-    // Second page using cursor
-    let resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(&format!("/api/v1/products?limit=2&cursor={}", next_cursor))
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_json(resp).await;
-    let second_page = body["items"].as_array().unwrap().clone();
-    assert_eq!(second_page.len(), 2);
-    assert!(body["prev_cursor"].as_str().is_some());
-
-    // Pages should not overlap
-    let first_ids: Vec<&str> = first_page
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
-    let second_ids: Vec<&str> = second_page
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
-    for id in &second_ids {
-        assert!(!first_ids.contains(id), "Pages overlap on id {}", id);
-    }
-}
-
-#[tokio::test]
-async fn pagination_last_page_has_no_next_cursor() {
-    let db = test_db().await;
-    create_n_active_products(&db.pool, 3).await;
-
-    let state = test_app_state(db.pool.clone());
-    let router = app(state);
-
-    // Fetch all in one page
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/products?limit=10")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_json(resp).await;
-    let items = body["items"].as_array().unwrap();
-    assert_eq!(items.len(), 3);
-    assert!(body["next_cursor"].is_null());
-}
-
-#[tokio::test]
-async fn pagination_empty_results() {
-    let db = test_db().await;
-    let state = test_app_state(db.pool.clone());
-    let router = app(state);
-
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/products?limit=10")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = body_json(resp).await;
-    let items = body["items"].as_array().unwrap();
-    assert!(items.is_empty());
-    assert!(body["next_cursor"].is_null());
-    assert!(body["prev_cursor"].is_null());
-}
-
-#[tokio::test]
-async fn pagination_seller_me_with_limit() {
-    let db = test_db().await;
-    let (seller, token) = create_n_active_products(&db.pool, 5).await;
-
-    let state = test_app_state(db.pool.clone());
-    let router = app(state);
-
-    let resp = router
-        .oneshot(authed_get("/api/v1/products/seller/me?limit=2", &token))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = body_json(resp).await;
-    let items = body["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
-    // All items belong to the seller
-    for item in items {
-        assert_eq!(item["seller_id"].as_str().unwrap(), seller.id.to_string());
-    }
-    assert!(body["next_cursor"].as_str().is_some());
 }
 
 #[tokio::test]

@@ -544,5 +544,3 @@ pub async fn delete_product_image(
 
     Ok(())
 }
-
-
