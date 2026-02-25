@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -9,12 +9,13 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::products::dtos::{
-    AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
-    ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
+    AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductFilterQuery,
+    ProductImageRes, ProductListRes, ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
 };
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
+use shared::db::pagination_support::PaginatedResponse;
 use shared::errors::AppError;
 use shared::responses;
 
@@ -54,9 +55,15 @@ pub fn product_routes(app_state: AppState) -> Router {
 
 async fn list_active_products(
     State(app_state): State<AppState>,
-) -> Result<Json<Vec<ProductRes>>, AppError> {
-    let products = app_state.service.list_active_products().await?;
-    Ok(Json(products))
+    Query(query): Query<ProductFilterQuery>,
+) -> Result<Json<PaginatedResponse<ProductListRes>>, AppError> {
+    let (params, mut filter) = query.into_parts();
+    filter.status = None; // public endpoint always filters to active
+    let result = app_state
+        .service
+        .list_active_products(params, filter)
+        .await?;
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn get_product_detail(
@@ -87,13 +94,15 @@ async fn create_product(
 
 async fn list_my_products(
     State(app_state): State<AppState>,
+    Query(query): Query<ProductFilterQuery>,
     current_user: CurrentUser,
-) -> Result<Json<Vec<ProductRes>>, AppError> {
-    let products = app_state
+) -> Result<Json<PaginatedResponse<ProductListRes>>, AppError> {
+    let (params, filter) = query.into_parts();
+    let result = app_state
         .service
-        .list_products_by_seller(current_user.id)
+        .list_products_by_seller(current_user.id, params, filter)
         .await?;
-    Ok(Json(products))
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn update_product(

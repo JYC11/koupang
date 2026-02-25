@@ -4,8 +4,9 @@ use crate::common::{
     sample_create_product_with_fks, sample_create_sku_req, seller_user, test_catalog_service,
     test_db,
 };
-use catalog::products::dtos::UpdateProductReq;
+use catalog::products::dtos::{ProductFilter, UpdateProductReq};
 use catalog::products::value_objects::{ProductId, ProductImageId, ProductStatus, SkuId};
+use shared::db::pagination_support::{PaginationDirection, PaginationParams};
 
 // ── Product service tests ───────────────────────────────────
 
@@ -74,6 +75,25 @@ async fn get_product_detail_includes_skus_and_images() {
     assert_eq!(detail.images.len(), 1);
 }
 
+fn default_params() -> PaginationParams {
+    PaginationParams {
+        limit: 20,
+        cursor: None,
+        direction: PaginationDirection::Forward,
+    }
+}
+
+fn default_filter() -> ProductFilter {
+    ProductFilter {
+        category_id: None,
+        brand_id: None,
+        min_price: None,
+        max_price: None,
+        search: None,
+        status: None,
+    }
+}
+
 #[tokio::test]
 async fn list_active_products_excludes_drafts() {
     let db = test_db().await;
@@ -86,8 +106,11 @@ async fn list_active_products_excludes_drafts() {
         .await
         .unwrap();
 
-    let active = service.list_active_products().await.unwrap();
-    assert!(active.is_empty());
+    let result = service
+        .list_active_products(default_params(), default_filter())
+        .await
+        .unwrap();
+    assert!(result.items.is_empty());
 
     // Activate the product
     let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
@@ -109,8 +132,11 @@ async fn list_active_products_excludes_drafts() {
         .await
         .unwrap();
 
-    let active = service.list_active_products().await.unwrap();
-    assert_eq!(active.len(), 1);
+    let result = service
+        .list_active_products(default_params(), default_filter())
+        .await
+        .unwrap();
+    assert_eq!(result.items.len(), 1);
 }
 
 #[tokio::test]

@@ -4,9 +4,12 @@ use crate::common::{
 };
 use catalog::brands::value_objects::BrandId;
 use catalog::categories::value_objects::CategoryId;
-use catalog::products::dtos::{ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq};
+use catalog::products::dtos::{
+    ProductFilter, ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq,
+};
 use catalog::products::repository;
 use catalog::products::value_objects::{Currency, Price, ProductId, ProductName, Slug};
+use shared::db::pagination_support::{PaginationDirection, PaginationParams};
 use uuid::Uuid;
 
 /// VO-validate a CreateProductReq into a ValidatedCreateProduct, bypassing FK checks for repo tests.
@@ -38,6 +41,25 @@ fn validated_sku(req: catalog::products::dtos::CreateSkuReq) -> ValidCreateSkuRe
 
 fn validated_image(req: catalog::products::dtos::AddProductImageReq) -> ValidAddProductImageReq {
     req.try_into().expect("sample data should be valid")
+}
+
+fn default_params() -> PaginationParams {
+    PaginationParams {
+        limit: 20,
+        cursor: None,
+        direction: PaginationDirection::Forward,
+    }
+}
+
+fn default_filter() -> ProductFilter {
+    ProductFilter {
+        category_id: None,
+        brand_id: None,
+        min_price: None,
+        max_price: None,
+        search: None,
+        status: None,
+    }
 }
 
 // ── Product tests ───────────────────────────────────────────
@@ -106,9 +128,14 @@ async fn list_products_by_seller() {
         .await
         .unwrap();
 
-    let products = repository::list_products_by_seller(&db.pool, seller_id)
-        .await
-        .unwrap();
+    let products = repository::list_products_by_seller(
+        &db.pool,
+        seller_id,
+        &default_params(),
+        &default_filter(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(products.len(), 2);
 }

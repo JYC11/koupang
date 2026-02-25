@@ -168,6 +168,7 @@ impl fmt::Display for Currency {
 // ── ProductStatus ───────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "VARCHAR")]
 #[sqlx(rename_all = "snake_case")]
 pub enum ProductStatus {
@@ -197,6 +198,7 @@ impl fmt::Display for ProductStatus {
 // ── SkuStatus ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "VARCHAR")]
 #[sqlx(rename_all = "snake_case")]
 pub enum SkuStatus {

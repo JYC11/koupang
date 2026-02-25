@@ -1,4 +1,5 @@
 use rust_decimal::Decimal;
+use shared::db::pagination_support::HasId;
 use sqlx::FromRow;
 use sqlx::types::Uuid;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -25,6 +26,29 @@ pub struct ProductEntity {
     pub category_slug: Option<String>,
     pub brand_name: Option<String>,
     pub brand_slug: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct ProductListEntity {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub seller_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub base_price: Decimal,
+    pub currency: String,
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
+    pub status: ProductStatus,
+    pub category_name: Option<String>,
+    pub brand_name: Option<String>,
+    pub image_url: Option<String>,
+}
+
+impl HasId for ProductListEntity {
+    fn id(&self) -> Uuid {
+        self.id
+    }
 }
 
 #[derive(Debug, Clone, FromRow)]

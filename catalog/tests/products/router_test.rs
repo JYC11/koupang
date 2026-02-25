@@ -1,11 +1,13 @@
 use crate::common::{
+    associate_brand_category, create_test_brand_named, create_test_category_named,
     sample_add_image_req, sample_create_product_req, sample_create_sku_req, test_app_state,
     test_auth_config, test_db,
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
-use catalog::products::dtos::ProductDetailRes;
+use catalog::products::dtos::{CreateProductReq, ProductDetailRes, UpdateProductReq};
+use catalog::products::value_objects::{ProductId, ProductStatus};
 use shared::auth::Role;
 use shared::auth::jwt::{CurrentUser, JwtService};
 use shared::test_utils::http::{body_bytes, body_json};
@@ -119,8 +121,11 @@ async fn list_active_products_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert!(body.is_empty()); // no active products yet
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert!(items.is_empty()); // no active products yet
+    assert!(body["next_cursor"].is_null());
+    assert!(body["prev_cursor"].is_null());
 }
 
 #[tokio::test]
@@ -412,7 +417,8 @@ async fn list_my_products_returns_only_owned() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let products: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let body = body_json(resp).await;
+    let products = body["items"].as_array().unwrap();
     assert_eq!(products.len(), 1);
     assert_eq!(
         products[0]["seller_id"].as_str().unwrap(),
@@ -580,4 +586,589 @@ async fn delete_image_via_router() {
         .unwrap();
     let images: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert!(images.is_empty());
+}
+
+// ── Pagination tests ────────────────────────────────────────
+
+/// Helper: create N active products for a seller, returns (seller, token)
+async fn create_n_active_products(pool: &shared::db::PgPool, n: usize) -> (CurrentUser, String) {
+    let state = test_app_state(pool.clone());
+    let user = seller();
+    let token = test_token(&user);
+    let service = &state.service;
+
+    for i in 0..n {
+        let mut req = sample_create_product_req();
+        req.name = format!("Product {}", i);
+        req.slug = Some(format!("product-{}", i));
+        let product = service.create_product(&user, req).await.unwrap();
+        let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
+        service
+            .update_product(
+                &user,
+                product_id,
+                UpdateProductReq {
+                    name: None,
+                    slug: None,
+                    description: None,
+                    base_price: None,
+                    currency: None,
+                    category_id: None,
+                    brand_id: None,
+                    status: Some(ProductStatus::Active),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    (user, token)
+}
+
+#[tokio::test]
+async fn pagination_limit_is_respected() {
+    let db = test_db().await;
+    create_n_active_products(&db.pool, 5).await;
+
+    let state = test_app_state(db.pool.clone());
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?limit=2")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(body["next_cursor"].as_str().is_some());
+    assert!(body["prev_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn pagination_forward_with_cursor() {
+    let db = test_db().await;
+    create_n_active_products(&db.pool, 5).await;
+
+    let state = test_app_state(db.pool.clone());
+    let router = app(state);
+
+    // First page
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?limit=2")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp).await;
+    let first_page = body["items"].as_array().unwrap().clone();
+    let next_cursor = body["next_cursor"].as_str().unwrap();
+
+    // Second page using cursor
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/products?limit=2&cursor={}", next_cursor))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp).await;
+    let second_page = body["items"].as_array().unwrap().clone();
+    assert_eq!(second_page.len(), 2);
+    assert!(body["prev_cursor"].as_str().is_some());
+
+    // Pages should not overlap
+    let first_ids: Vec<&str> = first_page
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    let second_ids: Vec<&str> = second_page
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    for id in &second_ids {
+        assert!(!first_ids.contains(id), "Pages overlap on id {}", id);
+    }
+}
+
+#[tokio::test]
+async fn pagination_last_page_has_no_next_cursor() {
+    let db = test_db().await;
+    create_n_active_products(&db.pool, 3).await;
+
+    let state = test_app_state(db.pool.clone());
+    let router = app(state);
+
+    // Fetch all in one page
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?limit=10")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn pagination_empty_results() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let router = app(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?limit=10")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert!(items.is_empty());
+    assert!(body["next_cursor"].is_null());
+    assert!(body["prev_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn pagination_seller_me_with_limit() {
+    let db = test_db().await;
+    let (seller, token) = create_n_active_products(&db.pool, 5).await;
+
+    let state = test_app_state(db.pool.clone());
+    let router = app(state);
+
+    let resp = router
+        .oneshot(authed_get("/api/v1/products/seller/me?limit=2", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    // All items belong to the seller
+    for item in items {
+        assert_eq!(item["seller_id"].as_str().unwrap(), seller.id.to_string());
+    }
+    assert!(body["next_cursor"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn pagination_includes_image_url() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let service = &state.service;
+
+    // Create product and activate it
+    let product = service
+        .create_product(&user, sample_create_product_req())
+        .await
+        .unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
+    service
+        .update_product(
+            &user,
+            product_id,
+            UpdateProductReq {
+                name: None,
+                slug: None,
+                description: None,
+                base_price: None,
+                currency: None,
+                category_id: None,
+                brand_id: None,
+                status: Some(ProductStatus::Active),
+            },
+        )
+        .await
+        .unwrap();
+
+    // Add an image
+    service
+        .add_image(&user, product_id, sample_add_image_req())
+        .await
+        .unwrap();
+
+    let router = app(state);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["image_url"].as_str().unwrap(),
+        "https://cdn.example.com/img/widget-1.jpg"
+    );
+}
+
+// ── Filter tests ─────────────────────────────────────────────
+
+/// Helper: create a product with specific attributes and activate it.
+/// Returns the product id as string.
+async fn create_active_product(
+    service: &catalog::products::service::CatalogService,
+    user: &CurrentUser,
+    req: CreateProductReq,
+) -> String {
+    let product = service.create_product(user, req).await.unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
+    service
+        .update_product(
+            user,
+            product_id,
+            UpdateProductReq {
+                name: None,
+                slug: None,
+                description: None,
+                base_price: None,
+                currency: None,
+                category_id: None,
+                brand_id: None,
+                status: Some(ProductStatus::Active),
+            },
+        )
+        .await
+        .unwrap();
+    product.id
+}
+
+#[tokio::test]
+async fn filter_by_category() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let service = &state.service;
+
+    let cat_a = create_test_category_named(&db.pool, "Phones").await;
+    let cat_b = create_test_category_named(&db.pool, "Laptops").await;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Phone One".into(),
+            slug: Some("phone-one".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(999, 2),
+            currency: None,
+            category_id: Some(cat_a.value()),
+            brand_id: None,
+        },
+    )
+    .await;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Laptop One".into(),
+            slug: Some("laptop-one".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(1999, 2),
+            currency: None,
+            category_id: Some(cat_b.value()),
+            brand_id: None,
+        },
+    )
+    .await;
+
+    let router = app(state);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/products?category_id={}", cat_a.value()))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Phone One");
+}
+
+#[tokio::test]
+async fn filter_by_brand() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let service = &state.service;
+
+    let cat = create_test_category_named(&db.pool, "Electronics").await;
+    let brand_a = create_test_brand_named(&db.pool, "BrandAlpha").await;
+    let brand_b = create_test_brand_named(&db.pool, "BrandBeta").await;
+    associate_brand_category(&db.pool, brand_a, cat).await;
+    associate_brand_category(&db.pool, brand_b, cat).await;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Alpha Widget".into(),
+            slug: Some("alpha-widget".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(500, 2),
+            currency: None,
+            category_id: Some(cat.value()),
+            brand_id: Some(brand_a.value()),
+        },
+    )
+    .await;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Beta Widget".into(),
+            slug: Some("beta-widget".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(700, 2),
+            currency: None,
+            category_id: Some(cat.value()),
+            brand_id: Some(brand_b.value()),
+        },
+    )
+    .await;
+
+    let router = app(state);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/v1/products?brand_id={}", brand_b.value()))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Beta Widget");
+}
+
+#[tokio::test]
+async fn filter_by_price_range() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let service = &state.service;
+
+    // Create products at different prices: 5.00, 15.00, 25.00
+    for (i, price) in [(500i64, 2u32), (1500, 2), (2500, 2)].iter().enumerate() {
+        create_active_product(
+            service,
+            &user,
+            CreateProductReq {
+                name: format!("Price Product {}", i),
+                slug: Some(format!("price-product-{}", i)),
+                description: None,
+                base_price: rust_decimal::Decimal::new(price.0, price.1),
+                currency: None,
+                category_id: None,
+                brand_id: None,
+            },
+        )
+        .await;
+    }
+
+    let router = app(state);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?min_price=10&max_price=20")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Price Product 1");
+}
+
+#[tokio::test]
+async fn filter_by_search() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let service = &state.service;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Blue Sneaker".into(),
+            slug: Some("blue-sneaker".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(5999, 2),
+            currency: None,
+            category_id: None,
+            brand_id: None,
+        },
+    )
+    .await;
+
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Red Jacket".into(),
+            slug: Some("red-jacket".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(8999, 2),
+            currency: None,
+            category_id: None,
+            brand_id: None,
+        },
+    )
+    .await;
+
+    let router = app(state);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/products?search=Sneaker")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Blue Sneaker");
+}
+
+#[tokio::test]
+async fn filter_by_status_seller_me() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let user = seller();
+    let token = test_token(&user);
+    let service = &state.service;
+
+    // Create a draft product (default status)
+    service
+        .create_product(
+            &user,
+            CreateProductReq {
+                name: "Draft Product".into(),
+                slug: Some("draft-product".into()),
+                description: None,
+                base_price: rust_decimal::Decimal::new(1000, 2),
+                currency: None,
+                category_id: None,
+                brand_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Create an active product
+    create_active_product(
+        service,
+        &user,
+        CreateProductReq {
+            name: "Active Product".into(),
+            slug: Some("active-product".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(2000, 2),
+            currency: None,
+            category_id: None,
+            brand_id: None,
+        },
+    )
+    .await;
+
+    // Without filter — should return both
+    let router = app(state.clone());
+    let resp = router
+        .oneshot(authed_get("/api/v1/products/seller/me", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["items"].as_array().unwrap().len(), 2);
+
+    // Filter by status=draft — should return only the draft product
+    let router = app(state.clone());
+    let resp = router
+        .oneshot(authed_get(
+            "/api/v1/products/seller/me?status=draft",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Draft Product");
+
+    // Filter by status=active — should return only the active product
+    let router = app(state);
+    let resp = router
+        .oneshot(authed_get(
+            "/api/v1/products/seller/me?status=active",
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"].as_str().unwrap(), "Active Product");
 }

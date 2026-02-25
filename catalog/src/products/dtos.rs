@@ -1,6 +1,6 @@
 use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
-use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
+use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
 use crate::products::repository;
 use crate::products::value_objects::{
     Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
@@ -8,9 +8,56 @@ use crate::products::value_objects::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use shared::db::PgPool;
+use shared::db::pagination_support::{PaginationParams, PaginationQuery};
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
 use uuid::Uuid;
+
+// ── Filter DTOs ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ProductFilterQuery {
+    // Pagination fields
+    pub limit: Option<u32>,
+    pub cursor: Option<Uuid>,
+    pub direction: Option<String>,
+    // Filter fields
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
+    pub min_price: Option<Decimal>,
+    pub max_price: Option<Decimal>,
+    pub search: Option<String>,
+    pub status: Option<ProductStatus>,
+}
+
+impl ProductFilterQuery {
+    pub fn into_parts(self) -> (PaginationParams, ProductFilter) {
+        let pagination = PaginationQuery {
+            limit: self.limit,
+            cursor: self.cursor,
+            direction: self.direction,
+        };
+        let filter = ProductFilter {
+            category_id: self.category_id,
+            brand_id: self.brand_id,
+            min_price: self.min_price,
+            max_price: self.max_price,
+            search: self.search,
+            status: self.status,
+        };
+        (pagination.into_params(), filter)
+    }
+}
+
+pub struct ProductFilter {
+    pub category_id: Option<Uuid>,
+    pub brand_id: Option<Uuid>,
+    pub min_price: Option<Decimal>,
+    pub max_price: Option<Decimal>,
+    pub search: Option<String>,
+    pub status: Option<ProductStatus>,
+}
+
 // ── Product Request DTOs ────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +152,43 @@ impl ProductRes {
             category_slug: entity.category_slug,
             brand_name: entity.brand_name,
             brand_slug: entity.brand_slug,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductListRes {
+    pub id: String,
+    pub created_at: String,
+    pub seller_id: String,
+    pub name: String,
+    pub slug: String,
+    pub base_price: Decimal,
+    pub currency: String,
+    pub category_id: Option<String>,
+    pub brand_id: Option<String>,
+    pub status: ProductStatus,
+    pub category_name: Option<String>,
+    pub brand_name: Option<String>,
+    pub image_url: Option<String>,
+}
+
+impl ProductListRes {
+    pub fn new(entity: ProductListEntity) -> Self {
+        Self {
+            id: fmt_id(&entity.id),
+            created_at: fmt_datetime(&entity.created_at),
+            seller_id: fmt_id(&entity.seller_id),
+            name: entity.name,
+            slug: entity.slug,
+            base_price: entity.base_price,
+            currency: entity.currency,
+            category_id: entity.category_id.map(|id| fmt_id(&id)),
+            brand_id: entity.brand_id.map(|id| fmt_id(&id)),
+            status: entity.status,
+            category_name: entity.category_name,
+            brand_name: entity.brand_name,
+            image_url: entity.image_url,
         }
     }
 }

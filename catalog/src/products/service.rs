@@ -1,13 +1,15 @@
 use crate::products::dtos::{
-    AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductImageRes,
-    ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq, ValidAddProductImageReq,
-    ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq, ValidUpdateSkuReq,
+    AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductFilter,
+    ProductImageRes, ProductListRes, ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
+    ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq,
+    ValidUpdateSkuReq,
 };
 use crate::products::repository;
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::auth::guards::require_access;
 use shared::auth::jwt::CurrentUser;
 use shared::db::PgPool;
+use shared::db::pagination_support::{PaginationParams, PaginationRes, get_cursors};
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
@@ -70,14 +72,25 @@ impl CatalogService {
     pub async fn list_products_by_seller(
         &self,
         seller_id: Uuid,
-    ) -> Result<Vec<ProductRes>, AppError> {
-        let products = repository::list_products_by_seller(&self.pool, seller_id).await?;
-        Ok(products.into_iter().map(ProductRes::new).collect())
+        params: PaginationParams,
+        filter: ProductFilter,
+    ) -> Result<PaginationRes<ProductListRes>, AppError> {
+        let mut products =
+            repository::list_products_by_seller(&self.pool, seller_id, &params, &filter).await?;
+        let cursors = get_cursors(&params, &mut products);
+        let items = products.into_iter().map(ProductListRes::new).collect();
+        Ok(PaginationRes::new(items, cursors))
     }
 
-    pub async fn list_active_products(&self) -> Result<Vec<ProductRes>, AppError> {
-        let products = repository::list_active_products(&self.pool).await?;
-        Ok(products.into_iter().map(ProductRes::new).collect())
+    pub async fn list_active_products(
+        &self,
+        params: PaginationParams,
+        filter: ProductFilter,
+    ) -> Result<PaginationRes<ProductListRes>, AppError> {
+        let mut products = repository::list_active_products(&self.pool, &params, &filter).await?;
+        let cursors = get_cursors(&params, &mut products);
+        let items = products.into_iter().map(ProductListRes::new).collect();
+        Ok(PaginationRes::new(items, cursors))
     }
 
     pub async fn update_product(

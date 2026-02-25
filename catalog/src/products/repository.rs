@@ -1,14 +1,15 @@
 use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
 use crate::products::dtos::{
-    ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq, ValidUpdateProductReq,
-    ValidUpdateSkuReq,
+    ProductFilter, ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq,
+    ValidUpdateProductReq, ValidUpdateSkuReq,
 };
-use crate::products::entities::{ProductEntity, ProductImageEntity, SkuEntity};
+use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::db::PgExec;
+use shared::db::pagination_support::{PaginationParams, keyset_paginate};
 use shared::errors::AppError;
-use sqlx::PgConnection;
+use sqlx::{PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 // ── Product queries ─────────────────────────────────────────
@@ -19,16 +20,27 @@ const PRODUCT_SELECT: &str = "\
            b.name AS brand_name, b.slug AS brand_slug \
     FROM products p \
     LEFT JOIN categories c ON p.category_id = c.id \
-    LEFT JOIN brands b ON p.brand_id = b.id";
+    LEFT JOIN brands b ON p.brand_id = b.id \
+    WHERE 1=1";
+
+const PRODUCT_LIST_SELECT: &str = "\
+    SELECT p.id, p.created_at, p.seller_id, p.name, p.slug, \
+           p.base_price, p.currency, p.category_id, p.brand_id, p.status, \
+           c.name AS category_name, b.name AS brand_name, \
+           pi.url AS image_url \
+    FROM products p \
+    LEFT JOIN categories c ON p.category_id = c.id \
+    LEFT JOIN brands b ON p.brand_id = b.id \
+    LEFT JOIN LATERAL ( \
+        SELECT url FROM product_images WHERE product_id = p.id ORDER BY sort_order ASC LIMIT 1 \
+    ) pi ON true \
+    WHERE 1=1";
 
 pub async fn get_product_by_id<'e>(
     executor: impl PgExec<'e>,
     id: ProductId,
 ) -> Result<ProductEntity, AppError> {
-    let sql = format!(
-        "{} WHERE p.id = $1 AND p.deleted_at IS NULL",
-        PRODUCT_SELECT
-    );
+    let sql = format!("{} AND p.id = $1 AND p.deleted_at IS NULL", PRODUCT_SELECT);
     sqlx::query_as::<_, ProductEntity>(&sql)
         .bind(id.value())
         .fetch_one(executor)
@@ -41,7 +53,7 @@ pub async fn get_product_by_slug<'e>(
     slug: &str,
 ) -> Result<ProductEntity, AppError> {
     let sql = format!(
-        "{} WHERE p.slug = $1 AND p.deleted_at IS NULL",
+        "{} AND p.slug = $1 AND p.deleted_at IS NULL",
         PRODUCT_SELECT
     );
     sqlx::query_as::<_, ProductEntity>(&sql)
@@ -51,16 +63,47 @@ pub async fn get_product_by_slug<'e>(
         .map_err(|e| AppError::NotFound(format!("Product not found: {}", e)))
 }
 
+fn apply_product_filters(qb: &mut QueryBuilder<Postgres>, filter: &ProductFilter) {
+    if let Some(category_id) = filter.category_id {
+        qb.push(" AND p.category_id = ");
+        qb.push_bind(category_id);
+    }
+    if let Some(brand_id) = filter.brand_id {
+        qb.push(" AND p.brand_id = ");
+        qb.push_bind(brand_id);
+    }
+    if let Some(min_price) = filter.min_price {
+        qb.push(" AND p.base_price >= ");
+        qb.push_bind(min_price);
+    }
+    if let Some(max_price) = filter.max_price {
+        qb.push(" AND p.base_price <= ");
+        qb.push_bind(max_price);
+    }
+    if let Some(ref search) = filter.search {
+        qb.push(" AND p.name ILIKE '%' || ");
+        qb.push_bind(search.clone());
+        qb.push(" || '%'");
+    }
+    if let Some(ref status) = filter.status {
+        qb.push(" AND p.status = ");
+        qb.push_bind(status.as_str().to_string());
+    }
+}
+
 pub async fn list_products_by_seller<'e>(
     executor: impl PgExec<'e>,
     seller_id: Uuid,
-) -> Result<Vec<ProductEntity>, AppError> {
-    let sql = format!(
-        "{} WHERE p.seller_id = $1 AND p.deleted_at IS NULL ORDER BY p.created_at DESC",
-        PRODUCT_SELECT
-    );
-    sqlx::query_as::<_, ProductEntity>(&sql)
-        .bind(seller_id)
+    params: &PaginationParams,
+    filter: &ProductFilter,
+) -> Result<Vec<ProductListEntity>, AppError> {
+    let mut qb = QueryBuilder::new(PRODUCT_LIST_SELECT);
+    qb.push(" AND p.seller_id = ");
+    qb.push_bind(seller_id);
+    qb.push(" AND p.deleted_at IS NULL");
+    apply_product_filters(&mut qb, filter);
+    keyset_paginate(params, Some("p"), &mut qb);
+    qb.build_query_as::<ProductListEntity>()
         .fetch_all(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to list products: {}", e)))
@@ -68,12 +111,15 @@ pub async fn list_products_by_seller<'e>(
 
 pub async fn list_active_products<'e>(
     executor: impl PgExec<'e>,
-) -> Result<Vec<ProductEntity>, AppError> {
-    let sql = format!(
-        "{} WHERE p.status = 'active' AND p.deleted_at IS NULL ORDER BY p.created_at DESC",
-        PRODUCT_SELECT
-    );
-    sqlx::query_as::<_, ProductEntity>(&sql)
+    params: &PaginationParams,
+    filter: &ProductFilter,
+) -> Result<Vec<ProductListEntity>, AppError> {
+    let mut qb = QueryBuilder::new(PRODUCT_LIST_SELECT);
+    qb.push(" AND p.status = 'active'");
+    qb.push(" AND p.deleted_at IS NULL");
+    apply_product_filters(&mut qb, filter);
+    keyset_paginate(params, Some("p"), &mut qb);
+    qb.build_query_as::<ProductListEntity>()
         .fetch_all(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to list products: {}", e)))

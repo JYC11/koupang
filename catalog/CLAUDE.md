@@ -29,9 +29,9 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 ### `/api/v1/products` — owner-or-admin for mutations
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| GET | `/`, `/{id}`, `/slug/{slug}` | public | detail includes SKUs + images |
+| GET | `/`, `/{id}`, `/slug/{slug}` | public | detail includes SKUs + images; list supports filters |
 | POST | `/` | seller | create product |
-| GET | `/seller/me` | seller | my products |
+| GET | `/seller/me` | seller | my products; supports filters + status filter |
 | PUT/DELETE | `/{id}` | owner/admin | soft delete |
 | GET/POST | `/{product_id}/skus` | public/owner | list / create SKU |
 | PUT/DELETE | `/skus/{sku_id}` | owner/admin | soft delete |
@@ -63,8 +63,8 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 | `SkuCode` | products | 2-100 chars, alphanumeric + hyphens/underscores |
 | `StockQuantity` | products | i32 >= 0 |
 | `Currency` | products | 3-letter ISO 4217, uppercased (default: USD) |
-| `ProductStatus` | products | Draft, Active, Inactive, Archived |
-| `SkuStatus` | products | Active, Inactive, OutOfStock |
+| `ProductStatus` | products | Draft, Active, Inactive, Archived (serde: snake_case) |
+| `SkuStatus` | products | Active, Inactive, OutOfStock (serde: snake_case) |
 | `LtreeLabel` | categories | lowercase + underscores, starts with letter; `from_name("Smart Phones")` → `smart_phones` |
 
 ## Key Patterns
@@ -76,6 +76,8 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 - **Partial updates:** Dynamic SQL (only provided fields)
 - **FK validation:** Validated DTOs enforce FK existence + brand-category association
 - **LEFT JOINs:** Product reads JOIN categories/brands for names/slugs in responses
+- **List filters:** `ProductFilterQuery` → `(PaginationParams, ProductFilter)` via `into_parts()`; filters: `category_id`, `brand_id`, `min_price`, `max_price`, `search` (ILIKE), `status` (seller/me only)
+- **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + QueryBuilder
 
 ## Env Vars
 
@@ -83,7 +85,7 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 
 ## Tests
 
-58 unit + 144 integration = 202 tests. `make test SERVICE=catalog`
+58 unit + 149 integration = 207 tests. `make test SERVICE=catalog`
 
 ### Tips
 - ltree: `::ltree` cast on INSERT, `::text` cast on SELECT
