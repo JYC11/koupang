@@ -24,7 +24,7 @@ koupang/
 ├── Cargo.toml                  # workspace root
 ├── Makefile
 ├── docker-compose.yml
-├── .plan/                      # critical-user-flows.md, ADRs (001–008), progress summaries
+├── .plan/                      # critical-user-flows.md, ADRs (001–009), progress summaries
 ├── shared/                     # COMPLETE — see shared/CLAUDE.md
 │   └── src/                    # server, auth/, db/, config/, cache/, email/, errors, responses, test_utils/
 ├── identity/                   # COMPLETE — see identity/CLAUDE.md IF you are working on identity
