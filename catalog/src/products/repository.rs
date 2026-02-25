@@ -5,13 +5,13 @@ use crate::products::dtos::{
     ValidUpdateProductReq, ValidUpdateSkuReq,
 };
 use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
+use crate::products::repository;
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
-use shared::db::PgExec;
 use shared::db::pagination_support::{PaginationParams, keyset_paginate};
+use shared::db::{PgExec, PgPool};
 use shared::errors::AppError;
 use sqlx::{PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
-
 // ── Product queries ─────────────────────────────────────────
 
 const PRODUCT_SELECT: &str = "\
@@ -516,5 +516,31 @@ pub async fn delete_product_image(
         return Err(AppError::NotFound("Image not found".to_string()));
     }
 
+    Ok(())
+}
+
+/// Core FK validation: existence checks + brand-category association.
+pub async fn validate_fk_references(
+    pool: &PgPool,
+    category_id: Option<CategoryId>,
+    brand_id: Option<BrandId>,
+) -> Result<(), AppError> {
+    if let Some(cat_id) = category_id {
+        if !repository::category_exists(pool, cat_id).await? {
+            return Err(AppError::BadRequest("Category does not exist".to_string()));
+        }
+    }
+    if let Some(br_id) = brand_id {
+        if !repository::brand_exists(pool, br_id).await? {
+            return Err(AppError::BadRequest("Brand does not exist".to_string()));
+        }
+    }
+    if let (Some(cat_id), Some(br_id)) = (category_id, brand_id) {
+        if !repository::is_brand_in_category(pool, br_id, cat_id).await? {
+            return Err(AppError::BadRequest(
+                "Brand is not associated with the specified category".to_string(),
+            ));
+        }
+    }
     Ok(())
 }

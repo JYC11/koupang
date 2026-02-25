@@ -2,6 +2,7 @@ use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
 use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
 use crate::products::repository;
+use crate::products::repository::validate_fk_references;
 use crate::products::value_objects::{
     Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
 };
@@ -12,7 +13,6 @@ use shared::db::pagination_support::{PaginationParams, PaginationQuery};
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
 use uuid::Uuid;
-
 // ── Filter DTOs ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -332,32 +332,6 @@ impl ValidUpdateProductReq {
             status: req.status,
         })
     }
-}
-
-/// Core FK validation: existence checks + brand-category association.
-async fn validate_fk_references(
-    pool: &PgPool,
-    category_id: Option<CategoryId>,
-    brand_id: Option<BrandId>,
-) -> Result<(), AppError> {
-    if let Some(cat_id) = category_id {
-        if !repository::category_exists(pool, cat_id).await? {
-            return Err(AppError::BadRequest("Category does not exist".to_string()));
-        }
-    }
-    if let Some(br_id) = brand_id {
-        if !repository::brand_exists(pool, br_id).await? {
-            return Err(AppError::BadRequest("Brand does not exist".to_string()));
-        }
-    }
-    if let (Some(cat_id), Some(br_id)) = (category_id, brand_id) {
-        if !repository::is_brand_in_category(pool, br_id, cat_id).await? {
-            return Err(AppError::BadRequest(
-                "Brand is not associated with the specified category".to_string(),
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
