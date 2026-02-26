@@ -40,10 +40,7 @@ impl TestRedis {
         let client = redis::Client::open(shared.url.as_str()).unwrap();
         let mut conn = redis::aio::ConnectionManager::new(client).await.unwrap();
         // Flush to ensure clean state for each test
-        let _: String = redis::cmd("FLUSHDB")
-            .query_async(&mut conn)
-            .await
-            .unwrap();
+        let _: String = redis::cmd("FLUSHDB").query_async(&mut conn).await.unwrap();
         Self { conn }
     }
 }

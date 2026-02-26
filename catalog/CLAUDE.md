@@ -86,7 +86,12 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 
 ## Tests
 
-58 unit + 151 integration = 209 tests. `make test SERVICE=catalog`
+58 unit + 77 integration = 135 tests. `make test SERVICE=catalog`
+
+Test layers follow `.plan/test-standards.md`:
+- Repository (16): internal helpers (has_products, has_children, FK exists, is_brand_in_category), JOIN behavior, ltree paths, soft deletes, stock adjustment SQL, CHECK constraints
+- Service (15): business guards (delete-with-products, delete-with-children), FK validation (6 tests), ownership checks, hierarchy logic, status filtering
+- Router (46): canonical CRUD flows, HTTP status codes, auth, pagination, filters
 
 ### Tips
 - ltree: `::ltree` cast on INSERT, `::text` cast on SELECT

@@ -1,15 +1,12 @@
 use crate::common::{
-    associate_brand_category, create_test_brand, create_test_category, sample_add_image_req,
-    sample_create_product_req, sample_create_product_with_fks, sample_create_sku_req, test_db,
+    associate_brand_category, create_test_brand, create_test_category, sample_create_product_req,
+    sample_create_product_with_fks, sample_create_sku_req, test_db,
 };
 use catalog::brands::value_objects::BrandId;
 use catalog::categories::value_objects::CategoryId;
-use catalog::products::dtos::{
-    ProductFilter, ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq,
-};
+use catalog::products::dtos::{ValidCreateProductReq, ValidCreateSkuReq};
 use catalog::products::repository;
-use catalog::products::value_objects::{Currency, Price, ProductId, ProductName, Slug};
-use shared::db::pagination_support::PaginationParams;
+use catalog::products::value_objects::{Currency, Price, ProductName, Slug};
 use uuid::Uuid;
 
 /// VO-validate a CreateProductReq into a ValidatedCreateProduct, bypassing FK checks for repo tests.
@@ -39,102 +36,7 @@ fn validated_sku(req: catalog::products::dtos::CreateSkuReq) -> ValidCreateSkuRe
     req.try_into().expect("sample data should be valid")
 }
 
-fn validated_image(req: catalog::products::dtos::AddProductImageReq) -> ValidAddProductImageReq {
-    req.try_into().expect("sample data should be valid")
-}
-
-fn default_params() -> PaginationParams {
-    PaginationParams::default()
-}
-
-fn default_filter() -> ProductFilter {
-    ProductFilter {
-        category_id: None,
-        brand_id: None,
-        min_price: None,
-        max_price: None,
-        search: None,
-        status: None,
-    }
-}
-
-// ── Product tests ───────────────────────────────────────────
-
-#[tokio::test]
-async fn create_and_get_product() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-    let validated = validated_product(sample_create_product_req());
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    let product_id = repository::create_product(&mut *conn, seller_id, validated)
-        .await
-        .unwrap();
-
-    let product = repository::get_product_by_id(&db.pool, product_id)
-        .await
-        .unwrap();
-
-    assert_eq!(product.seller_id, seller_id);
-    assert_eq!(product.name, "Test Widget");
-    assert_eq!(product.slug, "test-widget");
-    assert_eq!(product.currency, "USD");
-}
-
-#[tokio::test]
-async fn get_product_by_slug() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-    let validated = validated_product(sample_create_product_req());
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    repository::create_product(&mut *conn, seller_id, validated)
-        .await
-        .unwrap();
-
-    let product = repository::get_product_by_slug(&db.pool, "test-widget")
-        .await
-        .unwrap();
-
-    assert_eq!(product.name, "Test Widget");
-}
-
-#[tokio::test]
-async fn get_nonexistent_product_returns_error() {
-    let db = test_db().await;
-    let result = repository::get_product_by_id(&db.pool, ProductId::new(Uuid::new_v4())).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn list_products_by_seller() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    let v1 = validated_product(sample_create_product_req());
-    repository::create_product(&mut *conn, seller_id, v1)
-        .await
-        .unwrap();
-
-    let mut req2 = crate::common::sample_create_product_req_2();
-    req2.slug = Some("second-product".to_string());
-    let v2 = validated_product(req2);
-    repository::create_product(&mut *conn, seller_id, v2)
-        .await
-        .unwrap();
-
-    let products = repository::list_products_by_seller(
-        &db.pool,
-        seller_id,
-        &default_params(),
-        &default_filter(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(products.len(), 2);
-}
+// ── Soft delete behavior ────────────────────────────────────
 
 #[tokio::test]
 async fn delete_product_soft_deletes() {
@@ -156,33 +58,7 @@ async fn delete_product_soft_deletes() {
     assert!(result.is_err());
 }
 
-// ── SKU tests ───────────────────────────────────────────────
-
-#[tokio::test]
-async fn create_and_list_skus() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-    let vp = validated_product(sample_create_product_req());
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    let product_id = repository::create_product(&mut *conn, seller_id, vp)
-        .await
-        .unwrap();
-
-    let validated_sku = validated_sku(sample_create_sku_req());
-    let sku_id = repository::create_sku(&mut *conn, product_id, validated_sku)
-        .await
-        .unwrap();
-
-    let sku = repository::get_sku_by_id(&db.pool, sku_id).await.unwrap();
-    assert_eq!(sku.sku_code, "WIDGET-BLUE-XL");
-    assert_eq!(sku.stock_quantity, 100);
-
-    let skus = repository::list_skus_by_product(&db.pool, product_id)
-        .await
-        .unwrap();
-    assert_eq!(skus.len(), 1);
-}
+// ── Stock adjustment SQL correctness ────────────────────────
 
 #[tokio::test]
 async fn adjust_stock_increases_and_decreases() {
@@ -236,59 +112,7 @@ async fn adjust_stock_rejects_going_negative() {
     assert!(result.is_err());
 }
 
-// ── Image tests ─────────────────────────────────────────────
-
-#[tokio::test]
-async fn add_and_list_images() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-    let vp = validated_product(sample_create_product_req());
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    let product_id = repository::create_product(&mut *conn, seller_id, vp)
-        .await
-        .unwrap();
-
-    let validated_image = validated_image(sample_add_image_req());
-    repository::add_product_image(&mut *conn, product_id, validated_image)
-        .await
-        .unwrap();
-
-    let images = repository::list_images_by_product(&db.pool, product_id)
-        .await
-        .unwrap();
-    assert_eq!(images.len(), 1);
-    assert!(images[0].is_primary);
-    assert_eq!(images[0].url, "https://cdn.example.com/img/widget-1.jpg");
-}
-
-#[tokio::test]
-async fn delete_image() {
-    let db = test_db().await;
-    let seller_id = Uuid::new_v4();
-    let vp = validated_product(sample_create_product_req());
-
-    let mut conn = db.pool.acquire().await.unwrap();
-    let product_id = repository::create_product(&mut *conn, seller_id, vp)
-        .await
-        .unwrap();
-
-    let validated_image = validated_image(sample_add_image_req());
-    let image_id = repository::add_product_image(&mut *conn, product_id, validated_image)
-        .await
-        .unwrap();
-
-    repository::delete_product_image(&mut *conn, image_id)
-        .await
-        .unwrap();
-
-    let images = repository::list_images_by_product(&db.pool, product_id)
-        .await
-        .unwrap();
-    assert!(images.is_empty());
-}
-
-// ── FK validation helper tests ─────────────────────────────
+// ── FK validation helper tests ──────────────────────────────
 
 #[tokio::test]
 async fn category_exists_returns_true_for_existing() {
@@ -352,6 +176,8 @@ async fn is_brand_in_category_false_when_not_associated() {
             .unwrap()
     );
 }
+
+// ── JOIN behavior tests ─────────────────────────────────────
 
 #[tokio::test]
 async fn get_product_by_id_includes_joined_fields() {
