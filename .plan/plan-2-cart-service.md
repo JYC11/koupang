@@ -103,7 +103,15 @@ pub struct Cart {
 // total() -> sum of line_totals
 // item_count() -> items.len()
 ```
-
+#### Comment on the domain model:
+- this part has the potential to be very complex when we need to add complex total calculation logic
+- do we add the calculation logic in the cart service or in the order service?
+- should that shared logic be in the shared crate?
+- just a note that this can be very complex so we should be careful about it
+- others points to consider:
+  - what happens if the snapshot price is different from the current catalog price?
+  - what happens if the product is deleted from the catalog?
+  - what happens if the product is updated in the catalog?
 ---
 
 ## 6. DTOs
@@ -312,6 +320,9 @@ shared = { path = "../shared", features = ["test-utils"] }
 - Quantity: valid (1-99), reject 0, reject >99
 - PriceSnapshot: valid, reject negative
 - Currency: valid + normalize, reject wrong length
+
+## Comment on the tests:
+- revisit tests for the 3 layers below based on the test-standards we've established
 
 ### Repository tests (~15)
 - Set and get cart item roundtrip

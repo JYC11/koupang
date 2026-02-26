@@ -56,6 +56,15 @@ Key decisions:
 - `product_name` + `sku_code` snapshotted (order is self-contained)
 - `idempotency_key` is UNIQUE (enforces at-most-once creation)
 
+### Comment on shipping
+- We haven't planned shipping yet but this area I think would be also another very complex area
+- Some thinking into what the requirements could be for shipping could help shape the design
+- we may need to consider how to handle shipping costs, etc and how it contributes to total cost (which affects cart logic)
+- we may also need to consider receiving shipping address information from the buyer (affects identity service)
+
+### Comment on idempotency
+- Idempotency key should also be used for payment processing
+
 ### 1.2 State Machine
 
 ```
@@ -166,6 +175,15 @@ Pending → Authorized → Captured
   ↓           ↓
 Failed      Voided → (if captured) Refunded
 ```
+## Comment on Payments
+- when building payments, we have to think of the future of the system where refunds, subscription, and disbursements(give money to sellers) are possible.
+- so the information has to be stored in an event store manner for flexibility of the data
+- the state machine part is technically correct but the nature of data is that it's more of an event store
+- consider accounting concepts like ledger, ledger entries, credit/debit etc when building the financial part of the system
+- we may also need to consider saving payment information for future use (could affect identity service, where to store payment information???)
+- also standard payment gateway timeout/retry mechanisms to prevent deadlock in one state
+- also, how to handle out of order events? need some kinda state machine validation
+  - eg, payment can timeout and "fail" and then later suddenly succeed, so we need to handle that
 
 ### 2.3 Mock Payment Gateway
 
@@ -194,6 +212,9 @@ Follows ADR-006 pattern (EmailService trait with mock).
 | GET | `/api/v1/payments/{order_id}` | Owner/Admin | Payment status for order |
 
 Payment service is primarily event-driven. Most logic lives in consumers.
+
+## Comment on order endpoints
+- we need minimal endpoints for sellers and buyers to see their orders
 
 ### 2.5 Kafka Consumers
 
@@ -246,6 +267,11 @@ CREATE TABLE processed_events (...);
 ```
 
 Available stock = `stock_quantity - reserved_quantity`.
+## Comment on Inventory Reservations
+- This will effect showing inventory in the UI for read endpoints
+- Consider how we can accomplish this, perhaps a materialized view/regular view? Or some other option
+- Inventory reservation could fail
+- For "at the same time" reservations, we may need to think of some mitigation strategies like locking or queuing or some other mechanism
 
 Separate `inventory_reservations` table:
 - Tracks which order owns each reservation
@@ -361,11 +387,16 @@ OrderCreated → InventoryReserved → [Payment] declined → PaymentFailed
   → [Order] cancel → OrderCancelled → [Catalog] release inventory
 ```
 
-### Manual Cancellation
+### Manual Cancellation (from buyer side)
 ```
 POST /orders/{id}/cancel → OrderCancelled
   → [Catalog] release inventory + [Payment] void/refund
 ```
+
+## Comment on Saga Flows
+- More failure cases:
+  - Seller refuses to fulfill order for whatever reason besides inventory
+  - Timeout cases where payment is in "PENDING" forever
 
 ---
 
@@ -382,6 +413,11 @@ POST /orders/{id}/cancel → OrderCancelled
 ---
 
 ## 7. Testing
+
+## Comment on testing
+- revisit test cases after referring to test-standards.md
+- also think of how to test the entire saga flow with all the services up
+- how should we test various infra failure cases? we can try simulating them somehow
 
 ### Order Service (~80 tests)
 - Value objects: status transitions, idempotency key, quantity (~15)
@@ -411,6 +447,10 @@ async fn saga_happy_path() {
     // 4. Call order_service.handle_payment_authorized() → verify confirmed
 }
 ```
+
+### Other Comments:
+- how to prevent cascading failures?
+- how to ensure data drift/inconsistencies does not occur? particularly with money related stuff
 
 ---
 

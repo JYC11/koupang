@@ -5,6 +5,7 @@
 Build the event-driven backbone before implementing business services (cart, order, payment). This includes Kafka setup, shared event abstractions, transactional outbox pattern, distributed tracing, and bootstrap extensions.
 
 ---
+#### TODO need to read up more on Kafka and distributed tracing
 
 ## 1. Docker Compose Additions
 
@@ -87,6 +88,11 @@ jaeger:
 
 ---
 
+### Comments on Kafka:
+- Any considerations for Dead Letter Queues?
+- Kafka topic init/configuration stuff: is there a way to do this with code rather than scripting?
+- We have to consider cases where Kafka may be down, so we need to have a retry mechanism.
+
 ## 2. Topic Naming Convention
 
 Format: `{service}.events`, keyed by aggregate_id for partition ordering.
@@ -135,6 +141,9 @@ pub struct EventEnvelope {
     pub payload: serde_json::Value,
 }
 ```
+
+## Comment On EventMetadata
+- perhaps we can use enums and value objects for the types here as well?
 
 ### EventPublisher Trait (`producer.rs`)
 
@@ -225,6 +234,11 @@ with_transaction(&self.pool, |tx| Box::pin(async move {
 
 No changes to `transaction_support.rs` needed.
 
+
+## Comment on outbox
+- use the outbox crate: https://crates.io/crates/outbox-core
+- no need to reinvent the wheel because the outbox pattern gets complex quickly
+
 ---
 
 ## 5. Processed Events (Idempotent Consumers)
@@ -292,6 +306,10 @@ where F: FnOnce(redis::aio::ConnectionManager) -> Router
 ```
 
 No Postgres connection. Redis is required (panics if REDIS_URL not set).
+
+#### Comments on Redis-only service
+- at this point, it would be better to have a full service-builder abstraction
+- I don't want to introduce many run_x_service_with_infra functions
 
 ### Event-driven service (`run_event_driven_service`)
 
