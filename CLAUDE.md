@@ -97,6 +97,7 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 
 - **[Bootstrap recipe](.plan/bootstrap-recipe.md)** — step-by-step for creating a new service
 - **[Code patterns](.plan/patterns.md)** — endpoint, domain layer, and test patterns
+- **[Test standards](.plan/test-standards.md)** — what each test layer covers, shared container infrastructure
 
 ## Scripts
 

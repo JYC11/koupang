@@ -66,8 +66,8 @@ shared/src/
 | `test_utils::http::json_request` | Unauthenticated JSON request builder |
 | `test_utils::http::authed_json_request` | Authenticated JSON request builder |
 | `test_utils::http::authed_get/authed_delete` | Authenticated GET/DELETE builders |
-| `test_utils::db::TestDb::start(dir)` | Ephemeral Postgres 18 via testcontainers |
-| `test_utils::redis::TestRedis::start()` | Ephemeral Redis via testcontainers |
+| `test_utils::db::TestDb::start(dir)` | Shared Postgres 18 container; per-test DB via `CREATE DATABASE ... TEMPLATE` |
+| `test_utils::redis::TestRedis::start()` | Shared Redis container; `FLUSHDB` per test for isolation |
 
 ## Key Traits to Implement Per Service
 
