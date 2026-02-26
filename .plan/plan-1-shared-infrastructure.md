@@ -1,11 +1,10 @@
-# Plan 1: Shared Infrastructure
+# Plan 1: Shared Infrastructure (Revised)
 
 ## Context
 
-Build the event-driven backbone before implementing business services (cart, order, payment). This includes Kafka setup, shared event abstractions, transactional outbox pattern, distributed tracing, and bootstrap extensions.
+Build the event-driven backbone before implementing business services (cart, order, payment). This includes Kafka setup, shared event abstractions, transactional outbox (via `outbox-core` crate), distributed tracing, and a composable service builder.
 
 ---
-#### TODO need to read up more on Kafka and distributed tracing
 
 ## 1. Docker Compose Additions
 
@@ -55,24 +54,6 @@ kafka-ui:
     - "8080:8080"
 ```
 
-### Topic Init
-
-```yaml
-kafka-init:
-  image: apache/kafka:3.9.0
-  depends_on:
-    kafka:
-      condition: service_healthy
-  entrypoint: ["/bin/sh", "-c"]
-  command: |
-    "
-    /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.events --partitions 3 --replication-factor 1
-    /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic inventory.events --partitions 3 --replication-factor 1
-    /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic payments.events --partitions 3 --replication-factor 1
-    "
-  restart: "no"
-```
-
 ### Jaeger (Distributed Tracing)
 
 ```yaml
@@ -86,22 +67,22 @@ jaeger:
     - "4317:4317"    # OTLP gRPC
 ```
 
----
+**No `kafka-init` container** — topic creation is handled programmatically at service startup (see §3.6).
 
-### Comments on Kafka:
-- Any considerations for Dead Letter Queues?
-- Kafka topic init/configuration stuff: is there a way to do this with code rather than scripting?
-- We have to consider cases where Kafka may be down, so we need to have a retry mechanism.
+---
 
 ## 2. Topic Naming Convention
 
 Format: `{service}.events`, keyed by aggregate_id for partition ordering.
+Each service topic has a corresponding DLQ: `{service}.events.dlq`.
 
-| Topic | Key | Events |
-|-------|-----|--------|
-| `orders.events` | order_id | OrderCreated, OrderConfirmed, OrderCancelled |
-| `inventory.events` | order_id | InventoryReserved, InventoryReservationFailed |
-| `payments.events` | order_id | PaymentAuthorized, PaymentFailed, PaymentCaptured, PaymentVoided |
+| Topic | DLQ | Key | Events |
+|-------|-----|-----|--------|
+| `orders.events` | `orders.events.dlq` | order_id | OrderCreated, OrderConfirmed, OrderCancelled |
+| `inventory.events` | `inventory.events.dlq` | order_id | InventoryReserved, InventoryReservationFailed |
+| `payments.events` | `payments.events.dlq` | order_id | PaymentAuthorized, PaymentFailed, PaymentCaptured, PaymentVoided |
+
+**DLQ strategy**: After max retries (5), the consumer forwards the poison message to the DLQ topic (with original metadata preserved) and commits the offset. DLQ messages are inspectable via Kafka UI and can be replayed manually.
 
 ---
 
@@ -112,25 +93,47 @@ Format: `{service}.events`, keyed by aggregate_id for partition ordering.
 ```
 shared/src/events/
 ├── mod.rs              # re-exports, feature gates
-├── types.rs            # EventEnvelope, EventMetadata, DomainEvent trait (always compiled)
+├── types.rs            # EventEnvelope, EventMetadata, typed enums (always compiled)
 ├── producer.rs         # EventPublisher trait + KafkaEventPublisher (feature: kafka)
-├── consumer.rs         # KafkaEventConsumer (feature: kafka)
+├── consumer.rs         # KafkaEventConsumer with DLQ support (feature: kafka)
+├── admin.rs            # Programmatic topic creation via AdminClient (feature: kafka)
 ├── mock.rs             # MockEventPublisher (feature: test-utils)
-├── outbox.rs           # Outbox table CRUD (always compiled)
-└── outbox_relay.rs     # Background poller (feature: kafka)
+└── health.rs           # Kafka connectivity health check (feature: kafka)
 ```
 
-### Core Types (`types.rs`)
+### 3.1 Core Types (`types.rs`) — Typed Enums
 
 ```rust
+/// Each service defines its own variants; shared provides the trait + envelope.
+/// Serialized as PascalCase strings on the wire (e.g. "OrderCreated").
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub enum AggregateType {
+    Order,
+    Payment,
+    Inventory,
+    // Extensible per service via feature gates or a generic string fallback
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+pub enum EventType {
+    // Order events
+    OrderCreated, OrderConfirmed, OrderCancelled,
+    // Inventory events
+    InventoryReserved, InventoryReservationFailed, InventoryReleased,
+    // Payment events
+    PaymentAuthorized, PaymentFailed, PaymentCaptured, PaymentVoided,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventMetadata {
-    pub event_id: Uuid,           // UUID v7
-    pub event_type: String,       // "OrderCreated"
-    pub aggregate_type: String,   // "Order"
+    pub event_id: Uuid,               // UUID v7
+    pub event_type: EventType,        // typed enum (was String)
+    pub aggregate_type: AggregateType, // typed enum (was String)
     pub aggregate_id: Uuid,
     pub timestamp: DateTime<Utc>,
-    pub source_service: String,   // "order"
+    pub source_service: String,       // "order", "payment", etc.
     pub correlation_id: Option<String>,
     pub causation_id: Option<Uuid>,
 }
@@ -142,10 +145,7 @@ pub struct EventEnvelope {
 }
 ```
 
-## Comment On EventMetadata
-- perhaps we can use enums and value objects for the types here as well?
-
-### EventPublisher Trait (`producer.rs`)
+### 3.2 EventPublisher Trait (`producer.rs`)
 
 ```rust
 #[async_trait]
@@ -157,16 +157,16 @@ pub struct KafkaEventPublisher { producer: FutureProducer }
 // Uses rdkafka with acks=all, idempotence enabled, 3 retries
 ```
 
-### KafkaEventConsumer (`consumer.rs`)
+### 3.3 KafkaEventConsumer (`consumer.rs`)
 
 ```rust
-pub struct KafkaEventConsumer { consumer: StreamConsumer }
+pub struct KafkaEventConsumer { consumer: StreamConsumer, dlq_producer: FutureProducer }
 // Manual commit (at-least-once), auto.offset.reset=earliest
 // run() method accepts async handler closure
-// Poison pill messages are committed to avoid infinite loop
+// On handler failure after max retries: forward to DLQ topic, commit original offset
 ```
 
-### MockEventPublisher (`mock.rs`)
+### 3.4 MockEventPublisher (`mock.rs`)
 
 ```rust
 pub struct MockEventPublisher {
@@ -176,13 +176,43 @@ pub struct MockEventPublisher {
 // Follows MockEmailService pattern
 ```
 
+### 3.5 Kafka Health Check (`health.rs`)
+
+```rust
+pub async fn kafka_health_check(producer: &FutureProducer) -> HealthStatus {
+    // Attempts metadata fetch with short timeout
+    // Returns Healthy / Degraded / Unhealthy
+    // Used by service health endpoint — reports degraded (not hard-fail)
+    // Service can still accept writes (outbox buffers events)
+}
+```
+
+### 3.6 Programmatic Topic Creation (`admin.rs`)
+
+```rust
+pub async fn ensure_topics(
+    bootstrap_servers: &str,
+    topics: &[TopicSpec],  // name, partitions, replication_factor
+) -> Result<(), AppError>
+// Uses rdkafka AdminClient
+// Idempotent: creates only if topic doesn't exist
+// Called at service startup before spawning consumers
+// Eliminates kafka-init Docker container
+```
+
 ---
 
-## 4. Transactional Outbox
+## 4. Transactional Outbox (via `outbox-core` crate)
+
+Use the [`outbox-core`](https://crates.io/crates/outbox-core) crate instead of hand-rolling the outbox pattern. The outbox pattern gets complex quickly (polling, retry, batching, cleanup) and this crate handles it.
 
 ### Schema (per-service migration template)
 
+The outbox table schema will follow `outbox-core`'s expected format. We still own the migration since each service has its own DB.
+
 ```sql
+-- Schema will be adapted to outbox-core's requirements during implementation.
+-- Core concept remains: outbox row written in same transaction as domain data.
 CREATE TABLE outbox (
     id             UUID PRIMARY KEY DEFAULT uuidv7(),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -199,34 +229,12 @@ CREATE TABLE outbox (
 CREATE INDEX idx_outbox_unpublished ON outbox (created_at) WHERE published_at IS NULL;
 ```
 
-### Outbox Repository (`outbox.rs`)
-
-- `insert_outbox_event(conn, topic, envelope)` — called within existing transactions
-- `fetch_unpublished(conn, batch_size, max_retries)` — `SELECT ... FOR UPDATE SKIP LOCKED`
-- `mark_published(conn, event_id)`
-- `mark_failed(conn, event_id, error)`
-- `cleanup_published(conn, before_date)`
-
-### Outbox Relay (`outbox_relay.rs`)
-
-```rust
-pub fn spawn_outbox_relay(
-    pool: PgPool,
-    publisher: Arc<dyn EventPublisher>,
-    config: OutboxRelayConfig,  // poll_interval: 500ms, batch: 50, max_retries: 5
-) -> JoinHandle<()>
-```
-
-Background tokio task. Polls outbox, publishes to Kafka, marks published. Separate cleanup interval (hourly, 7-day retention).
-
 ### Integration with `with_transaction()`
 
 ```rust
-// In service layer:
+// In service layer — same pattern, outbox-core handles the relay/polling side:
 with_transaction(&self.pool, |tx| Box::pin(async move {
-    // 1. Write domain data
     let order = repository::create_order(tx.as_executor(), ...).await?;
-    // 2. Write outbox entry (same transaction)
     outbox::insert_outbox_event(tx.as_executor(), "orders.events", &envelope).await?;
     Ok(order)
 })).await
@@ -234,10 +242,11 @@ with_transaction(&self.pool, |tx| Box::pin(async move {
 
 No changes to `transaction_support.rs` needed.
 
+### Kafka Down Resilience
 
-## Comment on outbox
-- use the outbox crate: https://crates.io/crates/outbox-core
-- no need to reinvent the wheel because the outbox pattern gets complex quickly
+- **Producer side**: If Kafka is unreachable, the outbox relay's publish calls fail. Outbox entries stay unpublished and retry on next poll interval (500ms). No data loss — writes are already committed to Postgres.
+- **Consumer side**: `rdkafka` has built-in reconnection with configurable backoff. Consumers automatically resume from last committed offset when Kafka comes back.
+- **Health reporting**: `/health` endpoint reports Kafka as "degraded" (not a hard failure). Service continues accepting HTTP requests.
 
 ---
 
@@ -288,32 +297,36 @@ tracing-opentelemetry = { version = "0.29", optional = true }
 
 ---
 
-## 7. Server Bootstrap Extensions
+## 7. Service Builder (Composable Bootstrap)
 
-### Redis-only service (`run_redis_service_with_infra`)
+Replace proliferating `run_*_service_with_infra()` functions with a composable builder:
 
 ```rust
-pub struct RedisServiceConfig {
-    pub name: &'static str,
-    pub port_env_key: &'static str,
-}
-
-pub async fn run_redis_service_with_infra<F>(
-    config: RedisServiceConfig,
-    build_app: F,
-) -> Result<(), Box<dyn Error>>
-where F: FnOnce(redis::aio::ConnectionManager) -> Router
+ServiceBuilder::new("cart")
+    .with_redis()                              // optional — connects to Redis
+    .with_postgres()                           // optional — connects to Postgres, runs migrations
+    .with_kafka_producer()                     // optional — initializes FutureProducer
+    .with_kafka_consumers(consumer_configs)     // optional — spawns consumer tasks
+    .with_outbox_relay(outbox_config)          // optional — spawns outbox polling task
+    .build(|infra| {
+        // infra provides .pg_pool(), .redis_conn(), .kafka_producer() etc.
+        // Returns Router
+        app(infra)
+    })
+    .run()
+    .await
 ```
 
-No Postgres connection. Redis is required (panics if REDIS_URL not set).
+**Benefits**:
+- Each service composes only the infra it needs
+- No more `run_redis_service_with_infra`, `run_event_driven_service`, etc.
+- Existing `run_service_with_infra()` becomes a convenience wrapper (or services migrate to builder)
+- Easy to add new infra (e.g., gRPC, S3) without new top-level functions
 
-#### Comments on Redis-only service
-- at this point, it would be better to have a full service-builder abstraction
-- I don't want to introduce many run_x_service_with_infra functions
-
-### Event-driven service (`run_event_driven_service`)
-
-Extension of `run_service_with_infra` that optionally initializes Kafka producer, spawns outbox relay, and spawns consumer tasks.
+**Example service configurations**:
+- Cart: `.with_redis()` only
+- Identity: `.with_postgres()` only (existing behavior)
+- Order: `.with_postgres().with_kafka_producer().with_kafka_consumers(...).with_outbox_relay(...)`
 
 ---
 
@@ -322,13 +335,14 @@ Extension of `run_service_with_infra` that optionally initializes Kafka producer
 ```toml
 [dependencies]
 rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
+outbox-core = { version = "...", optional = true }  # version TBD after research
 opentelemetry = { version = "0.28", optional = true }
 opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.28", features = ["tonic"], optional = true }
 tracing-opentelemetry = { version = "0.29", optional = true }
 
 [features]
-kafka = ["dep:rdkafka"]
+kafka = ["dep:rdkafka", "dep:outbox-core"]
 telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ```
 
@@ -336,36 +350,39 @@ telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-ot
 
 ## 9. Implementation Order
 
-1. `events/types.rs` + `events/mock.rs` + `events/mod.rs` — zero external deps
-2. `events/outbox.rs` + integration tests with TestDb
-3. Docker compose additions (Kafka, Jaeger, topic init)
-4. `events/producer.rs` — KafkaEventPublisher with rdkafka
-5. `events/consumer.rs` — KafkaEventConsumer
-6. `events/outbox_relay.rs` — background poller
-7. `server.rs` — `RedisServiceConfig` + `run_redis_service_with_infra`
-8. `server.rs` — `run_event_driven_service` extension
-9. `observability.rs` — OTLP exporter (feature-gated)
-10. `config/kafka_config.rs` — expand with group_id, try_new()
-11. ADR-010: Event-driven architecture
+1. `events/types.rs` — typed enums (`EventType`, `AggregateType`), `EventEnvelope`, `EventMetadata`
+2. `events/mock.rs` + `events/mod.rs` — zero external deps, test infrastructure
+3. Research `outbox-core` API — verify compatibility with sqlx + `with_transaction()` pattern
+4. Docker compose additions (Kafka, Jaeger — no kafka-init container)
+5. `events/admin.rs` — programmatic topic creation via `AdminClient`
+6. `events/producer.rs` — `KafkaEventPublisher` with rdkafka
+7. `events/consumer.rs` — `KafkaEventConsumer` with DLQ support
+8. `events/health.rs` — Kafka connectivity health check
+9. Outbox integration via `outbox-core` crate + migration templates
+10. `server.rs` — `ServiceBuilder` composable bootstrap
+11. `observability.rs` — OTLP exporter (feature-gated)
+12. `config/kafka_config.rs` — expand with group_id, try_new()
+13. ADR-010: Event-driven architecture
 
 ## 10. Testing
 
-- Unit tests: EventEnvelope serialization round-trips
-- Integration: outbox insert/fetch/mark with TestDb
-- Integration: outbox relay with MockEventPublisher + TestDb
+- Unit tests: EventEnvelope serialization round-trips, typed enum serde
+- Unit tests: EventType/AggregateType enum coverage
+- Integration: outbox insert/fetch/mark with TestDb (via outbox-core)
+- Integration: DLQ forwarding (consumer sends poison pill to DLQ after max retries)
+- Integration: ServiceBuilder constructs correct infra combinations
 - Optional (ignored by default): full Kafka round-trip with testcontainers
 
 ## 11. Files Summary
 
 **New files** (~12):
-- `shared/src/events/{mod,types,producer,consumer,mock,outbox,outbox_relay}.rs`
+- `shared/src/events/{mod,types,producer,consumer,admin,mock,health}.rs`
 
-**Modified files** (~6):
+**Modified files** (~5):
 - `docker-compose.infra.yml`
 - `shared/Cargo.toml`
 - `shared/src/lib.rs`
-- `shared/src/server.rs`
+- `shared/src/server.rs` (ServiceBuilder)
 - `shared/src/observability.rs`
-- `shared/src/config/kafka_config.rs`
 
 **Unchanged**: identity/, catalog/ (fully backward compatible)

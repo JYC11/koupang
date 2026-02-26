@@ -1,8 +1,8 @@
-# Plan 2: Cart Service
+# Plan 2: Cart Service (Revised)
 
 ## Context
 
-Redis-only microservice for shopping cart storage. First service in the workspace without Postgres. Depends on Plan 1 for `RedisServiceConfig` + `run_redis_service_with_infra()` in shared.
+Redis-only microservice for shopping cart storage. First service in the workspace without Postgres. Depends on Plan 1 for `ServiceBuilder` with `.with_redis()`.
 
 ---
 
@@ -10,10 +10,13 @@ Redis-only microservice for shopping cart storage. First service in the workspac
 
 - **Storage**: Redis Hash per user, 30-day TTL, max 50 unique SKUs
 - **Auth**: Claims-based JWT (trusts JWT claims, no user DB lookup)
-- **No catalog validation on add**: Client provides price snapshot + display data. Validation happens at checkout via `/validate` endpoint (future catalog integration).
-- **Price strategy**: Store price at add time. Order service compares against current catalog price at checkout.
+- **No catalog validation on add**: Client provides price snapshot + display data
+- **Cart totals are display-only**: `line_total = qty * unit_price`, `cart_total = sum(line_totals)`. No tax, shipping, or discounts. These are UI estimates only.
+- **Order service owns authoritative totals**: At checkout, Order re-fetches current prices from Catalog and computes the real total. Cart snapshots are for display convenience.
+- **Price drift / staleness**: Caught at validate or checkout time (see `/validate` endpoint). Cart holds snapshots and doesn't care about catalog changes — expired items naturally clean up via 30-day TTL.
+- **No shared pricing crate yet**: Premature. Extract later if discounts/coupons (P4) require shared logic.
 - **Cart-to-order**: Cart provides data, Order service creates order and clears cart. Cart is purely a data holder.
-- **Bootstrap**: New `run_redis_service_with_infra()` (no Postgres connection)
+- **Bootstrap**: Via `ServiceBuilder::new("cart").with_redis()` (Plan 1)
 
 ---
 
@@ -26,7 +29,7 @@ Redis-only microservice for shopping cart storage. First service in the workspac
 | PUT | `/api/v1/cart/items/{sku_id}` | Any | Update quantity only | 200 + CartRes |
 | DELETE | `/api/v1/cart/items/{sku_id}` | Any | Remove item (idempotent) | 200 + message |
 | DELETE | `/api/v1/cart` | Any | Clear entire cart (idempotent) | 200 + message |
-| POST | `/api/v1/cart/validate` | Any | Validate cart (stub) | 200 + ValidationRes |
+| POST | `/api/v1/cart/validate` | Any | Validate cart against Catalog | 200 + ValidationRes |
 
 ---
 
@@ -94,24 +97,18 @@ pub struct CartItem {
     pub image_url: Option<String>,
     pub added_at: DateTime<Utc>,
 }
-// line_total() -> quantity * unit_price
+// line_total() -> quantity * unit_price (display-only estimate)
 
 pub struct Cart {
     pub user_id: Uuid,
     pub items: Vec<CartItem>,
 }
-// total() -> sum of line_totals
+// total() -> sum of line_totals (display-only estimate)
 // item_count() -> items.len()
 ```
-#### Comment on the domain model:
-- this part has the potential to be very complex when we need to add complex total calculation logic
-- do we add the calculation logic in the cart service or in the order service?
-- should that shared logic be in the shared crate?
-- just a note that this can be very complex so we should be careful about it
-- others points to consider:
-  - what happens if the snapshot price is different from the current catalog price?
-  - what happens if the product is deleted from the catalog?
-  - what happens if the product is updated in the catalog?
+
+Cart math is intentionally simple — no tax, shipping, or discounts. Order service computes authoritative totals at checkout.
+
 ---
 
 ## 6. DTOs
@@ -146,13 +143,22 @@ struct ValidUpdateCartItemReq { quantity: Quantity }
 struct CartRes {
     items: Vec<CartItemRes>,
     item_count: usize,
-    total: Decimal,
+    total: Decimal,          // display-only estimate
 }
 // CartItemRes includes line_total computed at response time
 
 struct CartValidationRes {
     items: Vec<CartValidationItemRes>,
     all_valid: bool,
+}
+
+struct CartValidationItemRes {
+    sku_id: Uuid,
+    price_changed: bool,
+    snapshot_price: Decimal,
+    current_price: Option<Decimal>,   // None if product unavailable
+    product_unavailable: bool,        // deleted or inactive in catalog
+    stock_insufficient: bool,         // quantity > available stock
 }
 ```
 
@@ -194,11 +200,26 @@ Methods:
 - `update_item_quantity(user_id, sku_id, UpdateCartItemReq)` → Cart (404 if not found)
 - `remove_item(user_id, sku_id)` → () (idempotent)
 - `clear_cart(user_id)` → () (idempotent)
-- `validate_cart(user_id)` → CartValidationRes (stub: all valid)
+- `validate_cart(user_id)` → CartValidationRes (checks each item against Catalog: price drift, availability, stock)
 
 ---
 
-## 9. Routes
+## 9. Validate Endpoint
+
+`POST /api/v1/cart/validate` — pre-checkout validation against Catalog:
+
+For each cart item, checks:
+- **Price drift**: `snapshot_price` vs current catalog price → `price_changed: bool`
+- **Product availability**: product deleted or inactive → `product_unavailable: bool`
+- **Stock sufficiency**: quantity > available stock → `stock_insufficient: bool`
+
+Returns `CartValidationRes` with `all_valid: bool` summary. Client can prompt user on changes before proceeding to checkout.
+
+**Note**: Initial implementation may stub the Catalog call (returns all valid) until inter-service communication is established. The DTO shape and endpoint are ready for real integration.
+
+---
+
+## 10. Routes
 
 File: `cart/src/cart/routes.rs`
 
@@ -208,7 +229,7 @@ Add/update/get return full cart response for optimistic UI updates.
 
 ---
 
-## 10. AppState & Bootstrap
+## 11. AppState & Bootstrap
 
 ### `cart/src/lib.rs`
 ```rust
@@ -220,18 +241,19 @@ pub struct AppState {
 
 ### `cart/src/main.rs`
 ```rust
-run_redis_service_with_infra(
-    RedisServiceConfig { name: "cart", port_env_key: "CART_PORT" },
-    |redis_conn| {
-        let app_state = AppState::new(redis_conn);
+ServiceBuilder::new("cart")
+    .with_redis()
+    .build(|infra| {
+        let app_state = AppState::new(infra.redis_conn());
         app(app_state).merge(health_routes("cart"))
-    },
-).await
+    })
+    .run()
+    .await
 ```
 
 ---
 
-## 11. File Structure
+## 12. File Structure
 
 ```
 cart/
@@ -260,7 +282,7 @@ cart/
 
 ---
 
-## 12. Cargo.toml
+## 13. Cargo.toml
 
 ```toml
 [package]
@@ -290,7 +312,7 @@ shared = { path = "../shared", features = ["test-utils"] }
 
 ---
 
-## 13. Error Handling
+## 14. Error Handling
 
 | Scenario | AppError Variant | Status |
 |----------|-----------------|--------|
@@ -304,7 +326,7 @@ shared = { path = "../shared", features = ["test-utils"] }
 
 ---
 
-## 14. Env Vars
+## 15. Env Vars
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
@@ -314,17 +336,14 @@ shared = { path = "../shared", features = ["test-utils"] }
 
 ---
 
-## 15. Tests (~55 total)
+## 16. Tests (~45 total, per test-standards.md)
 
 ### Value object unit tests (~10)
 - Quantity: valid (1-99), reject 0, reject >99
 - PriceSnapshot: valid, reject negative
 - Currency: valid + normalize, reject wrong length
 
-## Comment on the tests:
-- revisit tests for the 3 layers below based on the test-standards we've established
-
-### Repository tests (~15)
+### Repository tests (~12) — Redis testcontainer, data mechanics only
 - Set and get cart item roundtrip
 - Get empty cart
 - Remove item, clear cart
@@ -333,21 +352,21 @@ shared = { path = "../shared", features = ["test-utils"] }
 - TTL is set after write
 - Overwrite existing item
 
-### Service tests (~15)
+### Service tests (~12) — real Redis, business rules focus
 - Add item returns full cart
-- Validates quantity, price, product name
 - Rejects when cart full (50 items)
 - Replaces existing SKU (set semantics)
 - Update quantity success + not found
 - Remove item idempotent
 - Clear cart, get cart computes totals
-- Validate cart stub returns all valid
+- Validate cart returns expected structure
+(Validation errors like bad quantity/price are covered by value object unit tests, not duplicated here)
 
-### Router tests (~15)
+### Router tests (~11) — full HTTP integration, shape + auth focus
 - GET cart returns 200 (empty)
 - GET cart requires auth (401)
 - POST add item returns 200 with cart
-- POST add item returns 400 (invalid quantity)
+- POST add item returns 400 (invalid quantity — verifies HTTP error shape)
 - PUT update returns 200 / 404
 - DELETE item returns 200
 - DELETE cart returns 200
@@ -356,51 +375,17 @@ shared = { path = "../shared", features = ["test-utils"] }
 
 ---
 
-## 16. Implementation Order
+## 17. Implementation Order
 
-1. Shared: Add `RedisServiceConfig` + `run_redis_service_with_infra` to `server.rs`
-2. Workspace: Add `"cart"` to root `Cargo.toml` members
-3. `cart/Cargo.toml`
-4. Value objects + inline unit tests
-5. Domain model (CartItem, Cart)
-6. Repository (Redis operations) + repository tests
-7. DTOs (request, validated, response) + conversions
-8. Service layer + service tests
-9. Routes + router tests
-10. Bootstrap (lib.rs, main.rs)
-11. Module glue (mod.rs, tests/integration.rs, tests/common)
-12. `cart/CLAUDE.md`
-13. Update root `CLAUDE.md` services table
-
----
-
-## 17. Changes to Shared Crate
-
-Only one addition to `shared/src/server.rs`:
-
-```rust
-pub struct RedisServiceConfig {
-    pub name: &'static str,
-    pub port_env_key: &'static str,
-}
-
-pub async fn run_redis_service_with_infra<F>(
-    config: RedisServiceConfig,
-    build_app: F,
-) -> Result<(), Box<dyn Error>>
-where F: FnOnce(redis::aio::ConnectionManager) -> Router
-{
-    init_tracing(config.name);
-    let redis_config = RedisConfig::new();
-    let redis_conn = init_redis(redis_config).await;
-    let port: u16 = std::env::var(config.port_env_key)
-        .unwrap_or_else(|_| "3000".to_string())
-        .parse()
-        .expect("PORT must be valid u16");
-    let app = build_app(redis_conn);
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("{} listening on port {}", config.name, port);
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-```
+1. Workspace: Add `"cart"` to root `Cargo.toml` members
+2. `cart/Cargo.toml`
+3. Value objects + inline unit tests
+4. Domain model (CartItem, Cart)
+5. Repository (Redis operations) + repository tests
+6. DTOs (request, validated, response) + conversions
+7. Service layer + service tests
+8. Routes + router tests
+9. Bootstrap (lib.rs, main.rs) — uses `ServiceBuilder` from Plan 1
+10. Module glue (mod.rs, tests/integration.rs, tests/common)
+11. `cart/CLAUDE.md`
+12. Update root `CLAUDE.md` services table
