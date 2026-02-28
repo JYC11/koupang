@@ -7,6 +7,7 @@ pub mod db;
 pub mod dto_helpers;
 pub mod email;
 pub mod errors;
+pub mod events;
 pub mod grpc;
 pub mod health;
 pub mod new_types;
