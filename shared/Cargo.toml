@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "postgres" , "uuid", "rust_decimal"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "postgres" , "uuid", "rust_decimal", "chrono"] }
 uuid = { version = "1.21.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 rust_decimal = { version = "1.4.0", features = ["serde"] }
@@ -28,6 +28,9 @@ http-body-util = { version = "0.1", optional = true }
 
 [features]
 test-utils = ["dep:testcontainers-modules", "dep:tokio-stream", "dep:http-body-util", "tokio/net"]
+
+[dev-dependencies]
+sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14.5"
