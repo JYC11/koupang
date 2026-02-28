@@ -68,7 +68,7 @@ Tests: `tests/users/{repository,service,router,grpc_service}_test.rs` + `tests/c
 
 33 unit + 49 integration = 82 tests. `make test SERVICE=identity`
 
-Test layers follow `.plan/test-standards.md`:
+Test layers follow `/test-guide` skill:
 - Repository (10): constraint violations, nonexistent entity errors, default values, SQL time filtering
 - Service (8): argon2 hashing, JWT validation, GetCurrentUser trait, Redis cache behavior (5 tests)
 - Router (25): canonical CRUD flows, HTTP status codes, auth middleware, request parsing

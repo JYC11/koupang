@@ -93,11 +93,11 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 - Background jobs: https://crates.io/crates/aj
 - CQRS
 
-## Reference Docs (read on-demand, not auto-loaded)
+## Reference Skills (auto-triggered, not manually loaded)
 
-- **[Bootstrap recipe](.plan/bootstrap-recipe.md)** — step-by-step for creating a new service
-- **[Code patterns](.plan/patterns.md)** — endpoint, domain layer, and test patterns
-- **[Test standards](.plan/test-standards.md)** — what each test layer covers, shared container infrastructure
+- `/bootstrap` — step-by-step for creating a new service
+- `/implement` — endpoint, domain layer, and module patterns
+- `/test-guide` — what each test layer covers, shared container infrastructure
 
 ## Scripts
 

@@ -1,9 +1,20 @@
-# New Service Bootstrap Recipe
+---
+name: bootstrap
+description: >
+  Scaffold a new microservice in the koupang workspace. Use when the user says "new service",
+  "scaffold", "bootstrap", "create service", "add service", or starts implementing a stub service
+  (order, payment, shipping, notification, review, moderation, bff-gateway).
+---
 
-Use catalog as the reference implementation:
+# Bootstrap a New Service
+
+Use catalog as the reference implementation. Execute these steps in order.
+
+## Steps
 
 1. **Add crate to workspace** `Cargo.toml` members list
-2. **Create `src/main.rs`** — use `run_service_with_infra()`:
+
+2. **Create `src/main.rs`**
    ```rust
    use <service>::AppState;
    use <service>::app;
@@ -19,7 +30,7 @@ Use catalog as the reference implementation:
                db_url_env_key: "<SERVICE>_DB_URL",
                migrations_dir: "./.migrations/<service>",
            },
-           None::<NoGrpc>,  // or Some((GrpcConfig { .. }, grpc_router)) for gRPC
+           None::<NoGrpc>,
            |pool, redis_conn| {
                let app_state = AppState::new(pool, redis_conn);
                app(app_state).merge(health_routes("<service>"))
@@ -27,10 +38,19 @@ Use catalog as the reference implementation:
        ).await
    }
    ```
+
 3. **Create `src/lib.rs`** — define `AppState` (wraps `Arc<Service>` + `Arc<JwtService>`) and `app()` fn
+
 4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `domain.rs`, `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`
+
 5. **Create first migration**: `make migration SERVICE=<name> NAME=init`
+
 6. **Auth**: use `AuthMiddleware::new_claims_based(jwt_service)` for non-identity services (ADR-008)
+
 7. **Tests**: create `tests/integration.rs`, `tests/common/mod.rs` (with `test_db()`, `test_app_state()`, sample fixtures), and per-module test files
+
 8. **Add CLAUDE.md** in the service directory
+
 9. **Add env vars** to `docker-compose.yml`
+
+10. **Run `make test SERVICE=<name>`** and verify everything compiles

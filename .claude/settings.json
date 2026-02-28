@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE '(cargo |make )'; then cargo check --message-format short 2>&1 | head -20; fi",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
