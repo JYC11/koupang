@@ -2,12 +2,7 @@
 #!/bin/bash
 set -e
 
-DB_USER="admin"
-DB_PASS="1234"
-DB_HOST="localhost"
-DB_PORT="5432"
-
-SERVICES=(identity catalog order payment shipping notification review moderation)
+SERVICES=(shared identity catalog order payment shipping notification review moderation)
 
 # Parse arguments
 if [ $# -eq 0 ]; then
@@ -45,9 +40,14 @@ for service in "${services_to_test[@]}"; do
     echo "Running tests for: $service"
     echo "========================================="
 
-    export DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${service}"
+    # shared requires test-utils feature for integration tests
+    if [ "$service" == "shared" ]; then
+        CARGO_CMD="cargo test -p shared --features test-utils -- --test-threads=1"
+    else
+        CARGO_CMD="cargo test -p $service -- --test-threads=1"
+    fi
 
-    if cargo test -p "$service" -- --test-threads=1; then
+    if eval "$CARGO_CMD"; then
         echo "$service: PASSED"
     else
         echo "$service: FAILED"
