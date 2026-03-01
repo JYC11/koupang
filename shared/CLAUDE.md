@@ -131,6 +131,7 @@ claim_batch(pool, batch_size, instance_id)   → Vec<OutboxEvent>  (FOR UPDATE S
 - **Exponential backoff**: retry delays are 2s, 4s, 8s, ..., capped at 1024s
 - **Stale lock recovery**: `release_stale_locks()` frees events locked by crashed relays
 - **LISTEN/NOTIFY**: `pg_notify('outbox_events', id)` trigger wakes the relay on insert
+- **DB-enforced state machine**: `outbox_enforce_status_transition` trigger rejects invalid transitions (e.g. `published → pending`, `failed → *`)
 
 ### Migration template
 

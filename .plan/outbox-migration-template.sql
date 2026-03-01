@@ -76,6 +76,33 @@ CREATE TRIGGER outbox_events_after_insert
     AFTER INSERT ON outbox_events
     FOR EACH ROW EXECUTE FUNCTION notify_outbox_insert();
 
+-- ── Status transition enforcement ─────────────────────────────────────────
+-- Enforces the outbox state machine at the DB level:
+--   pending → pending      (retry with backoff, lock/unlock cycles)
+--   pending → published    (successful Kafka publish)
+--   pending → failed       (retries exhausted)
+--   self-transitions       (idempotent, always allowed)
+-- All other transitions are rejected with a check_violation exception.
+
+CREATE OR REPLACE FUNCTION enforce_outbox_status_transition() RETURNS trigger AS $$
+BEGIN
+    IF OLD.status = NEW.status THEN
+        RETURN NEW;
+    END IF;
+
+    IF OLD.status = 'pending' AND NEW.status IN ('published', 'failed') THEN
+        RETURN NEW;
+    END IF;
+
+    RAISE EXCEPTION 'invalid outbox status transition: % → %', OLD.status, NEW.status
+        USING ERRCODE = 'check_violation';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER outbox_enforce_status_transition
+    BEFORE UPDATE OF status ON outbox_events
+    FOR EACH ROW EXECUTE FUNCTION enforce_outbox_status_transition();
+
 -- ── Consumer: processed_events ──────────────────────────────────────────────
 -- Tracks which events this service has already processed (idempotency).
 -- Consumers call is_event_processed() before handling, then mark_event_processed()
