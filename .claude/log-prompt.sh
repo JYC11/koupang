@@ -10,7 +10,7 @@ case "$PWD" in
     *) exit 0 ;;
 esac
 
-MEMORY_DIR="$HOME/.claude/projects/-Users-admin-Desktop-code-koupang/memory/llm_usage_logging_folder"
+MEMORY_DIR="$HOME/.claude/llm_usage_logging_folder"
 LOG_FILE="$MEMORY_DIR/session-log-$(date +%Y-%m-%d).md"
 
 mkdir -p "$MEMORY_DIR"

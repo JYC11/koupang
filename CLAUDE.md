@@ -130,7 +130,7 @@ All service commands accept `SERVICE=all` to run against every service. The scri
 
 ## Prompt logging
 
-- At the END of every session, log all user prompts to `llm_usage_logging_folder/session-log-YYYY-MM-DD.md`
+- At the END of every session, log all user prompts to `~/.claude/llm_usage_logging_folder/session-log-YYYY-MM-DD.md`
 - This is for blogging purposes — logs will be used in blog posts about LLM usage
 - **Format** (append per session):
   ```
