@@ -1,10 +1,13 @@
 mod metrics;
 mod processed;
+mod relay;
 mod repository;
-mod types;
+pub(crate) mod types;
 
+pub use crate::config::relay_config::RelayConfig;
 pub use metrics::*;
 pub use processed::*;
+pub use relay::OutboxRelay;
 pub use repository::*;
 pub use types::{
     // Failure escalation
@@ -14,7 +17,6 @@ pub use types::{
     OutboxInsert,
     OutboxMetrics,
     OutboxStatus,
-    RelayConfig,
     // Trace context
     capture_trace_context,
 };

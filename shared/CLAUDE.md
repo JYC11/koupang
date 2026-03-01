@@ -26,7 +26,8 @@ shared/src/
 │   ├── db_config.rs           # DbConfig::new(env_key)
 │   ├── auth_config.rs         # AuthConfig::new(), ::for_tests()
 │   ├── redis_config.rs        # RedisConfig::new(), ::try_new()
-│   └── kafka_config.rs        # KafkaConfig::new(), ::from_brokers(), Default
+│   ├── kafka_config.rs        # KafkaConfig::new(), ::from_brokers(), Default
+│   └── relay_config.rs        # RelayConfig::from_env(), Default
 ├── events/
 │   ├── mod.rs                 # re-exports
 │   ├── types.rs               # EventEnvelope, EventMetadata, EventType, AggregateType, SourceService
@@ -36,9 +37,10 @@ shared/src/
 │   └── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
 ├── outbox/
 │   ├── mod.rs                 # re-exports
-│   ├── types.rs               # OutboxEvent, OutboxInsert, OutboxStatus, RelayConfig, FailureEscalation trait
+│   ├── types.rs               # OutboxEvent, OutboxInsert, OutboxStatus, FailureEscalation trait
 │   ├── repository.rs          # insert, claim_batch, mark_published, delete_published, mark_retry_or_failed, release_stale_locks, cleanup
 │   ├── processed.rs           # is_event_processed, mark_event_processed, cleanup_processed_events
+│   ├── relay.rs               # OutboxRelay — background task: claim → publish → ack
 │   └── metrics.rs             # collect_outbox_metrics → OutboxMetrics
 ├── cache/mod.rs               # init_redis(), init_optional_redis()
 ├── email/mod.rs               # EmailService trait, EmailMessage, MockEmailService
@@ -64,12 +66,12 @@ shared/src/
 | `auth::middleware` | `AuthMiddleware::new(jwt, user_lookup)` (identity), `::new_claims_based(jwt)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
 | `auth::role` | `Role` — Buyer, Seller, Admin |
-| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`) |
+| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`) |
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec` |
-| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait |
+| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
 
@@ -119,6 +121,24 @@ if is_event_processed(&pool, event_id).await? {
 // ... handle event ...
 mark_event_processed(&pool, event_id, "OrderCreated", "catalog").await?;
 ```
+
+### Relay (OutboxRelay — background task)
+
+```rust
+use shared::outbox::{OutboxRelay, RelayConfig};
+use shared::events::KafkaEventPublisher;
+use tokio_util::sync::CancellationToken;
+
+let publisher = Arc::new(KafkaEventPublisher::new(&kafka_config)?);
+let config = RelayConfig::default(); // or customize batch_size, poll_interval, etc.
+let relay = OutboxRelay::new(pool, publisher, config);
+
+let shutdown = CancellationToken::new();
+relay.run(shutdown.clone()).await; // runs until shutdown.cancel()
+```
+
+Runs 3 concurrent loops: relay (claim→publish→ack), stale lock recovery, cleanup.
+Wakes via PgListener NOTIFY on insert; falls back to `poll_interval` polling.
 
 ### Relay lifecycle (claim → publish → ack)
 

@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::Duration;
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -90,46 +88,6 @@ impl OutboxInsert {
     pub fn with_metadata(mut self, metadata: Option<serde_json::Value>) -> Self {
         self.metadata = metadata;
         self
-    }
-}
-
-// ── Relay configuration ──────────────────────────────────────────────
-
-/// Configuration for the outbox relay background task.
-pub struct RelayConfig {
-    /// Unique identifier for this relay instance (for lock ownership).
-    pub instance_id: String,
-    /// Maximum events to claim per batch.
-    pub batch_size: i64,
-    /// Fallback polling interval when LISTEN/NOTIFY is missed.
-    pub poll_interval: Duration,
-    /// How long before a lock is considered stale (dead relay detection).
-    pub stale_lock_timeout: Duration,
-    /// How often the cleanup maintenance loop runs.
-    pub cleanup_interval: Duration,
-    /// Maximum age of published events before cleanup deletes them.
-    pub cleanup_max_age: Duration,
-    /// When true, DELETE rows immediately after successful publish
-    /// instead of marking as 'published'. Reduces table bloat for
-    /// high-throughput services.
-    pub delete_on_publish: bool,
-    /// Optional handler invoked when an event exhausts all retries.
-    /// Defaults to `LogFailureEscalation` if not provided.
-    pub failure_escalation: Option<Arc<dyn FailureEscalation>>,
-}
-
-impl Default for RelayConfig {
-    fn default() -> Self {
-        Self {
-            instance_id: Uuid::now_v7().to_string(),
-            batch_size: 50,
-            poll_interval: Duration::from_millis(500),
-            stale_lock_timeout: Duration::from_secs(60),
-            cleanup_interval: Duration::from_secs(3600),
-            cleanup_max_age: Duration::from_secs(7 * 24 * 3600), // 7 days
-            delete_on_publish: false,
-            failure_escalation: None,
-        }
     }
 }
 
@@ -254,20 +212,6 @@ mod tests {
         assert_eq!(OutboxStatus::Pending.to_string(), "pending");
         assert_eq!(OutboxStatus::Published.to_string(), "published");
         assert_eq!(OutboxStatus::Failed.to_string(), "failed");
-    }
-
-    #[test]
-    fn relay_config_defaults() {
-        let config = RelayConfig::default();
-
-        assert_eq!(config.batch_size, 50);
-        assert_eq!(config.poll_interval, Duration::from_millis(500));
-        assert_eq!(config.stale_lock_timeout, Duration::from_secs(60));
-        assert_eq!(config.cleanup_interval, Duration::from_secs(3600));
-        assert_eq!(config.cleanup_max_age, Duration::from_secs(7 * 24 * 3600));
-        assert!(!config.delete_on_publish);
-        assert!(config.failure_escalation.is_none());
-        assert!(!config.instance_id.is_empty());
     }
 
     #[test]
