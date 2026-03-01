@@ -7,9 +7,14 @@ pub use metrics::*;
 pub use processed::*;
 pub use repository::*;
 pub use types::{
-    OutboxEvent, OutboxInsert, OutboxMetrics, OutboxStatus, RelayConfig,
     // Failure escalation
-    FailureEscalation, LogFailureEscalation,
+    FailureEscalation,
+    LogFailureEscalation,
+    OutboxEvent,
+    OutboxInsert,
+    OutboxMetrics,
+    OutboxStatus,
+    RelayConfig,
     // Trace context
     capture_trace_context,
 };

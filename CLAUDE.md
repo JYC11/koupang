@@ -99,6 +99,16 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 - `/implement` — endpoint, domain layer, and module patterns
 - `/test-guide` — what each test layer covers, shared container infrastructure
 
+## Local Infrastructure (docker-compose.infra.yml)
+
+| Service | Image | Host Port | Purpose |
+|---------|-------|-----------|---------|
+| Postgres | postgres:18 | 5432 | Primary data store |
+| Redis | redis:8.6 | 6379 | Cache / session / cart |
+| Kafka (KRaft) | apache/kafka:3.9 | 29092 | Event bus |
+| Kafka UI | provectuslabs/kafka-ui:0.7 | 8090 | Kafka admin UI |
+| Jaeger | jaegertracing/jaeger:2.4 | 16686 (UI), 4317 (OTLP gRPC), 4318 (OTLP HTTP) | Distributed tracing |
+
 ## Scripts
 
 - `make run SERVICE=identity` — run a service locally (requires local infra running)

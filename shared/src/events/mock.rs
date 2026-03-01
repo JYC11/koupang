@@ -150,11 +150,17 @@ mod tests {
         let order_events = publisher.events_for_topic("orders.events");
         assert_eq!(order_events.len(), 2);
         assert_eq!(order_events[0].metadata.event_type, EventType::OrderCreated);
-        assert_eq!(order_events[1].metadata.event_type, EventType::OrderCancelled);
+        assert_eq!(
+            order_events[1].metadata.event_type,
+            EventType::OrderCancelled
+        );
 
         let payment_events = publisher.events_for_topic("payments.events");
         assert_eq!(payment_events.len(), 1);
-        assert_eq!(payment_events[0].metadata.event_type, EventType::PaymentAuthorized);
+        assert_eq!(
+            payment_events[0].metadata.event_type,
+            EventType::PaymentAuthorized
+        );
 
         let inventory_events = publisher.events_for_topic("inventory.events");
         assert_eq!(inventory_events.len(), 0);

@@ -214,19 +214,10 @@ mod tests {
         let serialized = serde_json::to_string(&envelope).unwrap();
         let deserialized: EventEnvelope = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(
-            deserialized.metadata.event_type,
-            EventType::OrderCreated
-        );
-        assert_eq!(
-            deserialized.metadata.aggregate_type,
-            AggregateType::Order
-        );
+        assert_eq!(deserialized.metadata.event_type, EventType::OrderCreated);
+        assert_eq!(deserialized.metadata.aggregate_type, AggregateType::Order);
         assert_eq!(deserialized.metadata.aggregate_id, aggregate_id);
-        assert_eq!(
-            deserialized.metadata.source_service,
-            SourceService::Order
-        );
+        assert_eq!(deserialized.metadata.source_service, SourceService::Order);
         assert_eq!(
             deserialized.metadata.correlation_id.as_deref(),
             Some("trace-abc-123")

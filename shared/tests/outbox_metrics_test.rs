@@ -1,7 +1,7 @@
 use serde_json::json;
 use shared::outbox::{
-    claim_batch, collect_outbox_metrics, insert_outbox_event, mark_published,
-    mark_retry_or_failed, OutboxInsert,
+    OutboxInsert, claim_batch, collect_outbox_metrics, insert_outbox_event, mark_published,
+    mark_retry_or_failed,
 };
 use shared::test_utils::db::TestDb;
 use uuid::Uuid;
@@ -39,9 +39,15 @@ async fn collect_metrics_with_mixed_statuses() {
     let agg1 = Uuid::now_v7();
     let agg2 = Uuid::now_v7();
     let agg3 = Uuid::now_v7();
-    insert_outbox_event(&db.pool, &test_insert(agg1)).await.unwrap();
-    insert_outbox_event(&db.pool, &test_insert(agg2)).await.unwrap();
-    insert_outbox_event(&db.pool, &test_insert(agg3)).await.unwrap();
+    insert_outbox_event(&db.pool, &test_insert(agg1))
+        .await
+        .unwrap();
+    insert_outbox_event(&db.pool, &test_insert(agg2))
+        .await
+        .unwrap();
+    insert_outbox_event(&db.pool, &test_insert(agg3))
+        .await
+        .unwrap();
 
     // Publish one
     let batch = claim_batch(&db.pool, 1, "relay-1").await.unwrap();

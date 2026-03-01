@@ -57,11 +57,13 @@ async fn cleanup_deletes_old_events() {
         .unwrap();
 
     // Backdate the processed_at to 1 hour ago
-    sqlx::query("UPDATE processed_events SET processed_at = NOW() - INTERVAL '1 hour' WHERE event_id = $1")
-        .bind(event_id)
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE processed_events SET processed_at = NOW() - INTERVAL '1 hour' WHERE event_id = $1",
+    )
+    .bind(event_id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
 
     // Cleanup with max_age = 0 seconds — should delete everything
     let deleted = cleanup_processed_events(&db.pool, 0).await.unwrap();

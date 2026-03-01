@@ -243,8 +243,8 @@ mod tests {
     fn outbox_insert_with_metadata() {
         let envelope = test_envelope();
         let trace = json!({"trace_id": "abc123", "span_id": "def456"});
-        let insert =
-            OutboxInsert::from_envelope("orders.events", &envelope).with_metadata(Some(trace.clone()));
+        let insert = OutboxInsert::from_envelope("orders.events", &envelope)
+            .with_metadata(Some(trace.clone()));
 
         assert_eq!(insert.metadata, Some(trace));
     }

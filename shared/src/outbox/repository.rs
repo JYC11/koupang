@@ -204,11 +204,10 @@ pub async fn cleanup_published(
 
 /// Count of pending outbox events (lag).
 pub async fn outbox_lag(executor: impl sqlx::PgExecutor<'_>) -> Result<i64, AppError> {
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE status = 'pending'")
-            .fetch_one(executor)
-            .await
-            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE status = 'pending'")
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     Ok(row.0)
 }
 

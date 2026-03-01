@@ -1,5 +1,5 @@
 use serde_json::json;
-use shared::outbox::{insert_outbox_event, OutboxInsert};
+use shared::outbox::{OutboxInsert, insert_outbox_event};
 use shared::test_utils::db::TestDb;
 use uuid::Uuid;
 
@@ -87,7 +87,10 @@ async fn outbox_status_check_constraint_enforced() {
 
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("chk_outbox_status"), "Expected check constraint violation, got: {err}");
+    assert!(
+        err.contains("chk_outbox_status"),
+        "Expected check constraint violation, got: {err}"
+    );
 }
 
 // ── Status transition trigger tests ───────────────────────────────
@@ -173,7 +176,10 @@ async fn transition_published_to_published_allowed() {
         .bind(row.id)
         .execute(&db.pool)
         .await;
-    assert!(result.is_ok(), "published → published should be allowed (idempotent)");
+    assert!(
+        result.is_ok(),
+        "published → published should be allowed (idempotent)"
+    );
 }
 
 // ── Invalid transitions ──────────────────────────────────────────
@@ -296,5 +302,8 @@ async fn transition_failed_to_failed_allowed() {
         .bind(row.id)
         .execute(&db.pool)
         .await;
-    assert!(result.is_ok(), "failed → failed should be allowed (self-transition)");
+    assert!(
+        result.is_ok(),
+        "failed → failed should be allowed (self-transition)"
+    );
 }

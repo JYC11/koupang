@@ -1,8 +1,8 @@
 use serde_json::json;
 use shared::outbox::{
-    claim_batch, cleanup_published, delete_published, insert_outbox_event, mark_published,
-    mark_retry_or_failed, oldest_unpublished_age_secs, outbox_lag, release_stale_locks,
-    OutboxInsert,
+    OutboxInsert, claim_batch, cleanup_published, delete_published, insert_outbox_event,
+    mark_published, mark_retry_or_failed, oldest_unpublished_age_secs, outbox_lag,
+    release_stale_locks,
 };
 use shared::test_utils::db::TestDb;
 use uuid::Uuid;
@@ -156,13 +156,15 @@ async fn mark_published_updates_status() {
 
     mark_published(&db.pool, event_id).await.unwrap();
 
-    let row: (String, Option<chrono::DateTime<chrono::Utc>>, Option<String>) = sqlx::query_as(
-        "SELECT status, published_at, locked_by FROM outbox_events WHERE id = $1",
-    )
-    .bind(event_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let row: (
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+    ) = sqlx::query_as("SELECT status, published_at, locked_by FROM outbox_events WHERE id = $1")
+        .bind(event_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
 
     assert_eq!(row.0, "published");
     assert!(row.1.is_some(), "published_at should be set");
@@ -180,12 +182,11 @@ async fn delete_published_removes_row() {
 
     delete_published(&db.pool, row.id).await.unwrap();
 
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
-            .bind(row.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 0);
 }
 
@@ -219,13 +220,12 @@ async fn mark_retry_increments_count() {
     assert!(row.3.is_none(), "locked_by should be cleared");
 
     // Verify next_retry_at is in the future
-    let next_retry: (bool,) = sqlx::query_as(
-        "SELECT next_retry_at > NOW() FROM outbox_events WHERE id = $1",
-    )
-    .bind(event_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
+    let next_retry: (bool,) =
+        sqlx::query_as("SELECT next_retry_at > NOW() FROM outbox_events WHERE id = $1")
+            .bind(event_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
     assert!(next_retry.0, "next_retry_at should be in the future");
 }
 
@@ -252,12 +252,11 @@ async fn mark_retry_transitions_to_failed() {
         .await
         .unwrap();
 
-    let status: (String,) =
-        sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
-            .bind(event_id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let status: (String,) = sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
+        .bind(event_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
 
     assert_eq!(status.0, "failed");
 }
@@ -306,24 +305,21 @@ async fn cleanup_published_deletes_old() {
 
     // Mark published, then backdate published_at
     mark_published(&db.pool, row.id).await.unwrap();
-    sqlx::query(
-        "UPDATE outbox_events SET published_at = NOW() - interval '8 days' WHERE id = $1",
-    )
-    .bind(row.id)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE outbox_events SET published_at = NOW() - interval '8 days' WHERE id = $1")
+        .bind(row.id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
 
     // Cleanup events older than 7 days (604800 seconds)
     let deleted = cleanup_published(&db.pool, 604800).await.unwrap();
     assert_eq!(deleted, 1);
 
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
-            .bind(row.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 0);
 }
 
@@ -371,11 +367,9 @@ async fn concurrent_claim_batch_no_overlap() {
     let handles: Vec<_> = (0..5)
         .map(|i| {
             let pool = pool.clone();
-            tokio::spawn(async move {
-                claim_batch(&pool, 10, &format!("relay-{i}"))
-                    .await
-                    .unwrap()
-            })
+            tokio::spawn(
+                async move { claim_batch(&pool, 10, &format!("relay-{i}")).await.unwrap() },
+            )
         })
         .collect();
 
@@ -386,10 +380,18 @@ async fn concurrent_claim_batch_no_overlap() {
     }
 
     // All 10 events should be claimed exactly once — no duplicates
-    assert_eq!(all_claimed_ids.len(), 10, "all 10 events should be claimed across relays");
+    assert_eq!(
+        all_claimed_ids.len(),
+        10,
+        "all 10 events should be claimed across relays"
+    );
     all_claimed_ids.sort();
     all_claimed_ids.dedup();
-    assert_eq!(all_claimed_ids.len(), 10, "no duplicate claims should exist");
+    assert_eq!(
+        all_claimed_ids.len(),
+        10,
+        "no duplicate claims should exist"
+    );
 }
 
 #[tokio::test]
@@ -411,11 +413,9 @@ async fn concurrent_claim_batch_preserves_per_aggregate_ordering() {
     let handles: Vec<_> = (0..3)
         .map(|i| {
             let pool = pool.clone();
-            tokio::spawn(async move {
-                claim_batch(&pool, 10, &format!("relay-{i}"))
-                    .await
-                    .unwrap()
-            })
+            tokio::spawn(
+                async move { claim_batch(&pool, 10, &format!("relay-{i}")).await.unwrap() },
+            )
         })
         .collect();
 
@@ -472,7 +472,11 @@ async fn concurrent_claim_and_publish_cycle() {
 
     // Now relay 2 should be able to claim the 2 retried events
     let batch3 = claim_batch(&db.pool, 10, "relay-2").await.unwrap();
-    assert_eq!(batch3.len(), 2, "relay-2 should pick up the 2 retried events");
+    assert_eq!(
+        batch3.len(),
+        2,
+        "relay-2 should pick up the 2 retried events"
+    );
 
     // Verify no overlap with already-published events
     let published_ids: Vec<Uuid> = vec![batch1[0].id, batch1[1].id];
@@ -587,7 +591,9 @@ async fn exponential_backoff_values() {
 
     // Retry 1: backoff should be ~2 seconds
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    mark_retry_or_failed(&db.pool, batch[0].id, "err1").await.unwrap();
+    mark_retry_or_failed(&db.pool, batch[0].id, "err1")
+        .await
+        .unwrap();
 
     let delay_secs: (f64,) = sqlx::query_as(
         "SELECT EXTRACT(EPOCH FROM (next_retry_at - NOW()))::float8 FROM outbox_events WHERE id = $1",
@@ -612,7 +618,9 @@ async fn exponential_backoff_values() {
 
     // Retry 2: backoff should be ~4 seconds
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    mark_retry_or_failed(&db.pool, batch[0].id, "err2").await.unwrap();
+    mark_retry_or_failed(&db.pool, batch[0].id, "err2")
+        .await
+        .unwrap();
 
     let delay_secs: (f64,) = sqlx::query_as(
         "SELECT EXTRACT(EPOCH FROM (next_retry_at - NOW()))::float8 FROM outbox_events WHERE id = $1",
@@ -636,7 +644,9 @@ async fn exponential_backoff_values() {
 
     // Retry 3: backoff should be ~8 seconds
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    mark_retry_or_failed(&db.pool, batch[0].id, "err3").await.unwrap();
+    mark_retry_or_failed(&db.pool, batch[0].id, "err3")
+        .await
+        .unwrap();
 
     let delay_secs: (f64,) = sqlx::query_as(
         "SELECT EXTRACT(EPOCH FROM (next_retry_at - NOW()))::float8 FROM outbox_events WHERE id = $1",
@@ -670,7 +680,9 @@ async fn exponential_backoff_caps_at_2_pow_10() {
         .unwrap();
 
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    mark_retry_or_failed(&db.pool, batch[0].id, "err").await.unwrap();
+    mark_retry_or_failed(&db.pool, batch[0].id, "err")
+        .await
+        .unwrap();
 
     let delay_secs: (f64,) = sqlx::query_as(
         "SELECT EXTRACT(EPOCH FROM (next_retry_at - NOW()))::float8 FROM outbox_events WHERE id = $1",
@@ -736,7 +748,10 @@ async fn progressive_retry_through_exhaustion() {
         if retry < 3 {
             assert_eq!(status, "pending", "retry {retry}: should stay pending");
         } else {
-            assert_eq!(status, "failed", "retry {retry}: should transition to failed");
+            assert_eq!(
+                status, "failed",
+                "retry {retry}: should transition to failed"
+            );
         }
     }
 }
@@ -762,12 +777,11 @@ async fn max_retries_zero_immediate_failure() {
         .await
         .unwrap();
 
-    let status: (String,) =
-        sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
-            .bind(row.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let status: (String,) = sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(status.0, "failed", "max_retries=0 should fail immediately");
 }
 
@@ -792,7 +806,10 @@ async fn published_events_are_not_reclaimable() {
 
     // Even from a different relay
     let batch = claim_batch(&db.pool, 10, "relay-2").await.unwrap();
-    assert!(batch.is_empty(), "published events must not be reclaimed by any relay");
+    assert!(
+        batch.is_empty(),
+        "published events must not be reclaimed by any relay"
+    );
 }
 
 /// Failed events (retries exhausted) are never returned by claim_batch.
@@ -818,12 +835,11 @@ async fn failed_events_are_not_reclaimable() {
         .unwrap();
 
     // Verify it's failed
-    let status: (String,) =
-        sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
-            .bind(row.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let status: (String,) = sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(status.0, "failed");
 
     // Try to claim — should get nothing
@@ -858,7 +874,11 @@ async fn failed_event_does_not_block_subsequent_pending_events() {
 
     // Claim — event 2 should be claimable since DISTINCT ON picks oldest pending
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    assert_eq!(batch.len(), 1, "pending event after failed should be claimable");
+    assert_eq!(
+        batch.len(),
+        1,
+        "pending event after failed should be claimable"
+    );
     assert_eq!(batch[0].event_type, "ShouldSucceed");
 }
 
@@ -892,11 +912,13 @@ async fn claim_batch_only_returns_pending() {
         .unwrap();
 
     // Manually set statuses
-    sqlx::query("UPDATE outbox_events SET status = 'published', published_at = NOW() WHERE id = $1")
-        .bind(pub_row.id)
-        .execute(&db.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE outbox_events SET status = 'published', published_at = NOW() WHERE id = $1",
+    )
+    .bind(pub_row.id)
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE outbox_events SET status = 'failed' WHERE id = $1")
         .bind(fail_row.id)
         .execute(&db.pool)
@@ -1004,11 +1026,10 @@ async fn cleanup_ignores_pending_and_failed() {
     assert_eq!(deleted, 0, "no published events exist to clean up");
 
     // Both events still exist
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM outbox_events")
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox_events")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 2);
 }
 
@@ -1024,14 +1045,16 @@ async fn cleanup_spares_recent_published() {
 
     // Cleanup events older than 7 days — this one is fresh
     let deleted = cleanup_published(&db.pool, 604800).await.unwrap();
-    assert_eq!(deleted, 0, "recently published events should survive cleanup");
+    assert_eq!(
+        deleted, 0,
+        "recently published events should survive cleanup"
+    );
 
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
-            .bind(row.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 1);
 }
 
@@ -1123,7 +1146,10 @@ async fn payload_preserved_through_lifecycle() {
     insert_outbox_event(&db.pool, &insert).await.unwrap();
 
     let batch = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    assert_eq!(batch[0].payload, payload, "payload must survive claim intact");
+    assert_eq!(
+        batch[0].payload, payload,
+        "payload must survive claim intact"
+    );
 
     mark_published(&db.pool, batch[0].id).await.unwrap();
 
@@ -1156,12 +1182,11 @@ async fn mark_published_is_idempotent() {
     mark_published(&db.pool, event_id).await.unwrap();
     mark_published(&db.pool, event_id).await.unwrap();
 
-    let status: (String,) =
-        sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
-            .bind(event_id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap();
+    let status: (String,) = sqlx::query_as("SELECT status FROM outbox_events WHERE id = $1")
+        .bind(event_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
     assert_eq!(status.0, "published");
 }
 
@@ -1192,11 +1217,9 @@ async fn high_contention_many_relays_few_events() {
     let handles: Vec<_> = (0..20)
         .map(|i| {
             let pool = pool.clone();
-            tokio::spawn(async move {
-                claim_batch(&pool, 10, &format!("relay-{i}"))
-                    .await
-                    .unwrap()
-            })
+            tokio::spawn(
+                async move { claim_batch(&pool, 10, &format!("relay-{i}")).await.unwrap() },
+            )
         })
         .collect();
 
@@ -1205,7 +1228,11 @@ async fn high_contention_many_relays_few_events() {
         all_claimed.extend(handle.await.unwrap());
     }
 
-    assert_eq!(all_claimed.len(), 3, "exactly 3 events should be claimed total");
+    assert_eq!(
+        all_claimed.len(),
+        3,
+        "exactly 3 events should be claimed total"
+    );
 
     let mut ids: Vec<Uuid> = all_claimed.iter().map(|e| e.id).collect();
     ids.sort();
