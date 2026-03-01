@@ -49,3 +49,98 @@ impl TestKafka {
         KafkaConfig::from_brokers(&self.bootstrap_servers)
     }
 }
+
+// ── Test consumer ────────────────────────────────────────────────────
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use rdkafka::config::ClientConfig;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::message::Headers;
+use rdkafka::Message;
+use tokio_stream::StreamExt;
+use uuid::Uuid;
+
+/// A consumed Kafka message with all fields as owned data.
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    pub key: String,
+    pub payload: String,
+    pub headers: HashMap<String, String>,
+}
+
+impl ReceivedMessage {
+    /// Deserialize the payload as an `EventEnvelope`.
+    pub fn envelope(&self) -> crate::events::EventEnvelope {
+        serde_json::from_str(&self.payload).expect("payload is a valid EventEnvelope")
+    }
+}
+
+/// Kafka consumer for integration tests.
+///
+/// Creates a unique consumer group per instance and subscribes to a single topic.
+/// Handles transient `BrokerTransportFailure` errors during startup.
+pub struct TestConsumer {
+    consumer: StreamConsumer,
+}
+
+impl TestConsumer {
+    pub fn new(bootstrap_servers: &str, topic: &str) -> Self {
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", bootstrap_servers)
+            .set("group.id", &format!("test-group-{}", Uuid::now_v7()))
+            .set("auto.offset.reset", "earliest")
+            .create()
+            .expect("test consumer creation");
+        consumer.subscribe(&[topic]).expect("subscribe");
+        Self { consumer }
+    }
+
+    /// Consume the next message, retrying on transient broker transport errors.
+    /// Panics if no message arrives within 30 seconds.
+    pub async fn recv(&self) -> ReceivedMessage {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let remaining = deadline - tokio::time::Instant::now();
+            let result =
+                tokio::time::timeout(remaining, self.consumer.stream().next()).await;
+            match result {
+                Ok(Some(Ok(msg))) => {
+                    let key = msg
+                        .key()
+                        .map(|k| std::str::from_utf8(k).unwrap().to_string())
+                        .unwrap_or_default();
+                    let payload = msg
+                        .payload()
+                        .map(|p| std::str::from_utf8(p).unwrap().to_string())
+                        .unwrap_or_default();
+                    let mut headers = HashMap::new();
+                    if let Some(h) = msg.headers() {
+                        for i in 0..h.count() {
+                            if let Some(header) = h.try_get(i) {
+                                let val = header
+                                    .value
+                                    .map(|v| std::str::from_utf8(v).unwrap().to_string())
+                                    .unwrap_or_default();
+                                headers.insert(header.key.to_string(), val);
+                            }
+                        }
+                    }
+                    return ReceivedMessage {
+                        key,
+                        payload,
+                        headers,
+                    };
+                }
+                Ok(Some(Err(_))) => {
+                    // Transient error (e.g. BrokerTransportFailure) — retry
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+                Ok(None) => panic!("consumer stream ended unexpectedly"),
+                Err(_) => panic!("timed out waiting for message (30s)"),
+            }
+        }
+    }
+}

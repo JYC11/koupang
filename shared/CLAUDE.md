@@ -26,11 +26,13 @@ shared/src/
 │   ├── db_config.rs           # DbConfig::new(env_key)
 │   ├── auth_config.rs         # AuthConfig::new(), ::for_tests()
 │   ├── redis_config.rs        # RedisConfig::new(), ::try_new()
-│   └── kafka_config.rs        # KafkaConfig { brokers }
+│   └── kafka_config.rs        # KafkaConfig::new(), ::from_brokers(), Default
 ├── events/
 │   ├── mod.rs                 # re-exports
 │   ├── types.rs               # EventEnvelope, EventMetadata, EventType, AggregateType, SourceService
-│   ├── publisher.rs           # EventPublisher trait (async publish + publish_batch)
+│   ├── publisher.rs           # EventPublisher trait (async publish)
+│   ├── admin.rs               # KafkaAdmin, TopicSpec — idempotent topic creation
+│   ├── producer.rs            # KafkaEventPublisher — impl EventPublisher via rdkafka
 │   └── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
 ├── outbox/
 │   ├── mod.rs                 # re-exports
@@ -46,6 +48,7 @@ shared/src/
     ├── http.rs                # body_bytes(), body_json(), json_request(), authed_json_request(), authed_get(), authed_delete()
     ├── db.rs                  # TestDb::start(migrations_dir)
     ├── redis.rs               # TestRedis::start()
+    ├── kafka.rs               # TestKafka::start(), TestConsumer::new(brokers, topic), ReceivedMessage
     └── grpc.rs                # start_test_grpc_server()
 ```
 
@@ -61,11 +64,11 @@ shared/src/
 | `auth::middleware` | `AuthMiddleware::new(jwt, user_lookup)` (identity), `::new_claims_based(jwt)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
 | `auth::role` | `Role` — Buyer, Seller, Admin |
-| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` |
+| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`) |
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
-| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher` |
+| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
@@ -83,6 +86,8 @@ shared/src/
 | `test_utils::http::authed_get/authed_delete` | Authenticated GET/DELETE builders |
 | `test_utils::db::TestDb::start(dir)` | Shared Postgres 18 container; per-test DB via `CREATE DATABASE ... TEMPLATE` |
 | `test_utils::redis::TestRedis::start()` | Shared Redis container; `FLUSHDB` per test for isolation |
+| `test_utils::kafka::TestKafka::start()` | Shared Kafka container (KRaft); topic isolation via unique names |
+| `test_utils::kafka::TestConsumer::new(brokers, topic)` | Kafka consumer with retry on transient errors; `.recv()` → `ReceivedMessage` |
 
 ## Transactional Outbox (events + outbox modules)
 
@@ -137,6 +142,53 @@ claim_batch(pool, batch_size, instance_id)   → Vec<OutboxEvent>  (FOR UPDATE S
 
 Copy `.plan/outbox-migration-template.sql` into your service's migration directory.
 Creates both `outbox_events` (producer) and `processed_events` (consumer) tables.
+
+## Kafka Infrastructure (events module)
+
+### Topic management
+
+```rust
+use shared::events::{KafkaAdmin, TopicSpec};
+use shared::config::kafka_config::KafkaConfig;
+
+let config = KafkaConfig::new(); // reads KAFKA_BROKERS env, default "localhost:29092"
+let admin = KafkaAdmin::new(&config)?;
+admin.ensure_topics(&[
+    TopicSpec::new("order.events", 3, 1),
+    TopicSpec::new("payment.events", 3, 1)
+        .with_config("retention.ms", "604800000"),
+]).await?; // idempotent — existing topics silently skipped
+```
+
+### Publishing events directly (used by the relay)
+
+```rust
+use shared::events::{KafkaEventPublisher, EventPublisher};
+
+let publisher = KafkaEventPublisher::new(&config)?;
+publisher.publish("order.events", &envelope).await?;
+// Payload: JSON-serialized EventEnvelope
+// Key: aggregate_id (partition affinity)
+// Headers: event_id, event_type, aggregate_type, aggregate_id, source_service,
+//          correlation_id (if set), causation_id (if set)
+```
+
+### Testing with Kafka
+
+```rust
+use shared::test_utils::kafka::{TestKafka, TestConsumer};
+
+let kafka = TestKafka::start().await;       // shared KRaft container via OnceCell
+let config = kafka.kafka_config();          // KafkaConfig pointing at testcontainer
+let topic = format!("test-{}", Uuid::now_v7()); // unique topic per test
+
+// ... publish ...
+
+let consumer = TestConsumer::new(&kafka.bootstrap_servers, &topic);
+let msg = consumer.recv().await;            // retries on transient BrokerTransportFailure
+let envelope = msg.envelope();              // deserialize payload as EventEnvelope
+assert_eq!(msg.headers["event_type"], "OrderCreated");
+```
 
 ## Key Traits to Implement Per Service
 

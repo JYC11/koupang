@@ -47,10 +47,12 @@ Use catalog as the reference implementation. Execute these steps in order.
 
 6. **Auth**: use `AuthMiddleware::new_claims_based(jwt_service)` for non-identity services (ADR-008)
 
-7. **Tests**: create `tests/integration.rs`, `tests/common/mod.rs` (with `test_db()`, `test_app_state()`, sample fixtures), and per-module test files
+7. **Kafka topics** (if service publishes events): create topics on startup using `KafkaAdmin::ensure_topics()`, add outbox migration from `.plan/outbox-migration-template.sql`
 
-8. **Add CLAUDE.md** in the service directory
+8. **Tests**: create `tests/integration.rs`, `tests/common/mod.rs` (with `test_db()`, `test_app_state()`, sample fixtures), and per-module test files. For event-publishing services, add outbox+kafka integration tests using `TestKafka` and `TestConsumer`
 
-9. **Add env vars** to `docker-compose.yml`
+9. **Add CLAUDE.md** in the service directory
 
-10. **Run `make test SERVICE=<name>`** and verify everything compiles
+10. **Add env vars** to `docker-compose.yml`
+
+11. **Run `make test SERVICE=<name>`** and verify everything compiles

@@ -44,29 +44,21 @@ Happy-path CRUD flow?              → Router test (covers all layers)
 ## Test Infrastructure
 
 ```rust
-// tests/common/mod.rs
+// tests/common/mod.rs — per-service helpers
 pub async fn test_db() -> TestDb {
     TestDb::start("./migrations").await
 }
 pub fn test_app_state(pool: PgPool) -> AppState {
     AppState::new_with_jwt(pool, test_auth_config())
 }
-pub fn seller_user() -> CurrentUser {
-    CurrentUser { id: Uuid::new_v4(), role: Role::Seller }
-}
-
-// tests/<module>/<layer>_test.rs
-#[tokio::test]
-async fn test_create_thing() {
-    let db = test_db().await;
-    let service = test_catalog_service(db.pool.clone());
-    let user = seller_user();
-    let result = service.create_thing(&user, sample_req()).await;
-    assert!(result.is_ok());
-}
 ```
 
-Shared Postgres container per test binary. Each test gets its own DB via `CREATE DATABASE ... TEMPLATE` (~50-100ms). Redis tests share a container, flushed via `FLUSHDB`.
+Container sharing and test utilities (TestDb, TestRedis, TestKafka, TestConsumer) are documented in [shared/CLAUDE.md](../../shared/CLAUDE.md#test-utilities-feature-test-utils).
+
+### Event Integration — Outbox + Kafka
+**Infra:** Shared TestDb + TestKafka
+**Test:** full relay cycle (insert → claim → publish → consume), payload fidelity through Kafka, per-aggregate ordering, consumer idempotency, delete-on-publish mode, retry-then-publish
+**See:** [shared/CLAUDE.md](../../shared/CLAUDE.md#transactional-outbox-events--outbox-modules) for outbox + Kafka API examples
 
 ## Order for New Services
 
@@ -74,4 +66,5 @@ Shared Postgres container per test binary. Each test gets its own DB via `CREATE
 2. Router tests for all endpoints (canonical happy-path + HTTP contract)
 3. Service tests only for auth guards and business rules
 4. Repository tests only for SQL-specific concerns
-5. Verify no test duplicates an assertion at another layer
+5. Event integration tests for services that publish domain events
+6. Verify no test duplicates an assertion at another layer
