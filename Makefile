@@ -6,6 +6,36 @@ local-infra: ## Setup local infrastructure with docker compose
 local-infra-down: ## Setup local infrastructure with docker compose
 	 docker compose -f docker-compose.infra.yml down
 
+.PHONY: fmt
+fmt: ## Format a service (usage: make fmt SERVICE=identity, make fmt SERVICE=all CHECK=1)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make fmt SERVICE=<service-name|all> [CHECK=1]"; \
+		echo ""; \
+		echo "Available services: shared, identity, catalog, order, payment, shipping, notification, review, moderation, all"; \
+		exit 1; \
+	fi
+	@bash util-scripts/fmt.sh $(SERVICE) $(if $(CHECK),--check)
+
+.PHONY: check
+check: ## Type-check a service with optional clippy (usage: make check SERVICE=identity, make check SERVICE=all CLIPPY=1)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make check SERVICE=<service-name|all> [CLIPPY=1]"; \
+		echo ""; \
+		echo "Available services: shared, identity, catalog, order, payment, shipping, notification, review, moderation, all"; \
+		exit 1; \
+	fi
+	@bash util-scripts/check.sh $(SERVICE) $(if $(CLIPPY),--clippy)
+
+.PHONY: build
+build: ## Build a service (usage: make build SERVICE=identity, make build SERVICE=all RELEASE=1)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make build SERVICE=<service-name|all> [RELEASE=1]"; \
+		echo ""; \
+		echo "Available services: shared, identity, catalog, order, payment, shipping, notification, review, moderation, all"; \
+		exit 1; \
+	fi
+	@bash util-scripts/build.sh $(SERVICE) $(if $(RELEASE),--release)
+
 .PHONY: run
 run: ## Run a specific service locally (usage: make run SERVICE=identity)
 	@if [ -z "$(SERVICE)" ]; then \

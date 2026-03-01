@@ -11,8 +11,8 @@ use shared::events::{
     KafkaEventPublisher, SourceService, TopicSpec,
 };
 use shared::outbox::{
-    claim_batch, collect_outbox_metrics, delete_published, insert_outbox_event,
-    is_event_processed, mark_event_processed, mark_published, mark_retry_or_failed, OutboxInsert,
+    OutboxInsert, claim_batch, collect_outbox_metrics, delete_published, insert_outbox_event,
+    is_event_processed, mark_event_processed, mark_published, mark_retry_or_failed,
 };
 use shared::test_utils::db::TestDb;
 use shared::test_utils::kafka::{TestConsumer, TestKafka};
@@ -97,7 +97,10 @@ async fn relay_full_cycle_insert_claim_publish_consume() {
 
     // 6. Verify outbox row is now published (not pending)
     let reclaimed = claim_batch(&db.pool, 10, "relay-1").await.unwrap();
-    assert!(reclaimed.is_empty(), "published events should not be reclaimable");
+    assert!(
+        reclaimed.is_empty(),
+        "published events should not be reclaimable"
+    );
 }
 
 // ── Batch publish ────────────────────────────────────────────────────
@@ -203,7 +206,10 @@ async fn outbox_payload_fidelity_through_kafka() {
     let msg = consumer.recv().await;
     let received = msg.envelope();
 
-    assert_eq!(received.metadata.event_id, original_envelope.metadata.event_id);
+    assert_eq!(
+        received.metadata.event_id,
+        original_envelope.metadata.event_id
+    );
     assert_eq!(received.metadata.event_type, EventType::OrderCreated);
     assert_eq!(received.metadata.aggregate_type, AggregateType::Order);
     assert_eq!(received.metadata.aggregate_id, agg_id);
@@ -223,10 +229,7 @@ async fn outbox_payload_fidelity_through_kafka() {
     assert_eq!(msg.headers["aggregate_type"], "Order");
     assert_eq!(msg.headers["source_service"], "order");
     assert_eq!(msg.headers["aggregate_id"], agg_id.to_string());
-    assert_eq!(
-        msg.headers["correlation_id"],
-        "trace-fidelity-test"
-    );
+    assert_eq!(msg.headers["correlation_id"], "trace-fidelity-test");
     assert_eq!(msg.headers["causation_id"], causation_id.to_string());
 }
 
@@ -266,9 +269,14 @@ async fn consumer_idempotency_via_processed_events() {
     assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
 
     // Process and mark
-    mark_event_processed(&db.pool, received.metadata.event_id, "OrderCreated", "test-consumer")
-        .await
-        .unwrap();
+    mark_event_processed(
+        &db.pool,
+        received.metadata.event_id,
+        "OrderCreated",
+        "test-consumer",
+    )
+    .await
+    .unwrap();
 
     // Second time: already processed — consumer would skip
     assert!(is_event_processed(&db.pool, event_id).await.unwrap());
@@ -307,14 +315,16 @@ async fn relay_delete_on_publish_removes_outbox_row() {
     delete_published(&db.pool, outbox_row.id).await.unwrap();
 
     // Row is gone from DB
-    let row_exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM outbox_events WHERE id = $1)",
-    )
-    .bind(outbox_row.id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert!(!row_exists.0, "outbox row should be deleted after delete_on_publish");
+    let row_exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM outbox_events WHERE id = $1)")
+            .bind(outbox_row.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(
+        !row_exists.0,
+        "outbox row should be deleted after delete_on_publish"
+    );
 
     // But the message is still on Kafka
     let consumer = TestConsumer::new(&kafka.bootstrap_servers, &topic);
@@ -399,9 +409,12 @@ async fn relay_mixed_event_types_across_topics() {
     let order_env = order_envelope(order_id);
     let payment_env = payment_envelope(payment_id);
 
-    insert_outbox_event(&db.pool, &OutboxInsert::from_envelope(&order_topic, &order_env))
-        .await
-        .unwrap();
+    insert_outbox_event(
+        &db.pool,
+        &OutboxInsert::from_envelope(&order_topic, &order_env),
+    )
+    .await
+    .unwrap();
     insert_outbox_event(
         &db.pool,
         &OutboxInsert::from_envelope(&payment_topic, &payment_env),
@@ -423,7 +436,10 @@ async fn relay_mixed_event_types_across_topics() {
     // Consume from order topic
     let order_consumer = TestConsumer::new(&kafka.bootstrap_servers, &order_topic);
     let order_msg = order_consumer.recv().await;
-    assert_eq!(order_msg.envelope().metadata.event_type, EventType::OrderCreated);
+    assert_eq!(
+        order_msg.envelope().metadata.event_type,
+        EventType::OrderCreated
+    );
     assert_eq!(order_msg.envelope().metadata.aggregate_id, order_id);
 
     // Consume from payment topic
@@ -472,9 +488,12 @@ async fn relay_preserves_per_aggregate_ordering() {
     insert_outbox_event(&db.pool, &OutboxInsert::from_envelope(&topic, &created_env))
         .await
         .unwrap();
-    insert_outbox_event(&db.pool, &OutboxInsert::from_envelope(&topic, &confirmed_env))
-        .await
-        .unwrap();
+    insert_outbox_event(
+        &db.pool,
+        &OutboxInsert::from_envelope(&topic, &confirmed_env),
+    )
+    .await
+    .unwrap();
 
     let publisher = KafkaEventPublisher::new(&config).unwrap();
 
@@ -504,7 +523,10 @@ async fn relay_preserves_per_aggregate_ordering() {
     assert_eq!(msg1.envelope().payload["step"], 1);
 
     let msg2 = consumer.recv().await;
-    assert_eq!(msg2.envelope().metadata.event_type, EventType::OrderConfirmed);
+    assert_eq!(
+        msg2.envelope().metadata.event_type,
+        EventType::OrderConfirmed
+    );
     assert_eq!(msg2.envelope().payload["step"], 2);
 }
 
@@ -561,7 +583,10 @@ async fn large_payload_survives_full_pipeline() {
 
     let received_items = received.payload["items"].as_array().unwrap();
     assert_eq!(received_items.len(), 1000);
-    assert_eq!(received_items[0]["name"], "Product 0 with a reasonably long description for testing");
+    assert_eq!(
+        received_items[0]["name"],
+        "Product 0 with a reasonably long description for testing"
+    );
     assert_eq!(received_items[999]["quantity"], 999);
 }
 

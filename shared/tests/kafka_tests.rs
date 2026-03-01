@@ -174,8 +174,7 @@ async fn concurrent_publishers_same_topic() {
         .await
         .unwrap();
 
-    let publisher: Arc<dyn EventPublisher> =
-        Arc::new(KafkaEventPublisher::new(&config).unwrap());
+    let publisher: Arc<dyn EventPublisher> = Arc::new(KafkaEventPublisher::new(&config).unwrap());
 
     // Spawn 10 concurrent publish tasks
     let mut handles = Vec::new();

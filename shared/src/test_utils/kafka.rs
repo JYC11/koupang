@@ -55,10 +55,10 @@ impl TestKafka {
 use std::collections::HashMap;
 use std::time::Duration;
 
+use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Headers;
-use rdkafka::Message;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
@@ -103,8 +103,7 @@ impl TestConsumer {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let remaining = deadline - tokio::time::Instant::now();
-            let result =
-                tokio::time::timeout(remaining, self.consumer.stream().next()).await;
+            let result = tokio::time::timeout(remaining, self.consumer.stream().next()).await;
             match result {
                 Ok(Some(Ok(msg))) => {
                     let key = msg

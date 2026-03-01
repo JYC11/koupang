@@ -99,6 +99,12 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 - `/implement` — endpoint, domain layer, and module patterns
 - `/test-guide` — what each test layer covers, shared container infrastructure
 
+## Code Review
+
+- **During development**: `/simplify` to review changed code for quality, or ask directly to review specific files/modules
+- **Before merge**: `/code-review` on a PR branch for multi-agent review with confidence scoring (requires `gh` CLI)
+- **Rust-specific**: rust-skills plugin auto-triggers `m15-anti-pattern`, `coding-guidelines`, `unsafe-checker` when relevant
+
 ## Local Infrastructure (docker-compose.infra.yml)
 
 | Service | Image | Host Port | Purpose |
@@ -111,21 +117,43 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 
 ## Scripts
 
+- `make fmt SERVICE=identity` — format a service (`CHECK=1` for CI check-only mode)
+- `make check SERVICE=identity` — type-check a service (`CLIPPY=1` to also run clippy)
+- `make build SERVICE=identity` — build a service (`RELEASE=1` for release mode)
 - `make run SERVICE=identity` — run a service locally (requires local infra running)
 - `make test SERVICE=identity` — run tests for a service
 - `make migration SERVICE=identity NAME=init` — create a new migration file
 - `make adr` — create a new ADR file (auto-increments number)
 - `make local-infra` / `make local-infra-down` — start/stop local Docker infra
 
+All service commands accept `SERVICE=all` to run against every service. The scripts handle the `shared` crate's `--features test-utils` flag automatically.
+
 ## Prompt logging
 
-- At the END of every session, log all user prompts from this session to the memory folder under `llm_usage_logging_folder/`
-- Format: append to a file named by date (e.g. `session-log-2026-02-25.md`)
-- Each entry should include: session start time, numbered user prompts (just the raw text, no system messages), and a 1-line summary of what was accomplished
-- This is for blogging purposes — the logs will be used in blog posts about LLM usage
+- At the END of every session, log all user prompts to `llm_usage_logging_folder/session-log-YYYY-MM-DD.md`
+- This is for blogging purposes — logs will be used in blog posts about LLM usage
+- **Format** (append per session):
+  ```
+  ## Session N — HH:MM
+
+  ### User Prompts
+  1. first prompt text
+  2. second prompt text
+
+  ### Summary
+  One paragraph of what was accomplished.
+  ```
+- **Do NOT** include: raw JSON, system messages, hook payloads, timestamps per prompt, or code blocks around prompts
+- Raw hook data may be appended automatically by hooks — that's fine, but the clean summary section above is what matters for blogging
+
+## Session Start
+
+After loading project context (`/project-context`), always also:
+1. Load the `br` skill and run `br list` to see current task state
+2. This replaces the need to separately invoke `/br`
 
 ## Task management
 
 - beads_rust: https://github.com/Dicklesworthstone/beads_rust
-  - br skill has been created for use
-  - load in this skill first and then create tasks when plan is approved
+- **Always load the `br` skill (Skill tool) before running any `br` CLI commands.** Do not guess at br syntax — the skill has the complete command reference.
+- After plan approval, create br tasks to track implementation work.
