@@ -20,18 +20,13 @@ async fn connect_db(db_config: DbConfig) -> Pool<Postgres> {
 async fn migrate_db(pool: &Pool<Postgres>, migrations_dir: &str) {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let migrations_dir = std::path::Path::new(&crate_dir).join(migrations_dir);
-    let migration_results = sqlx::migrate::Migrator::new(migrations_dir)
+    sqlx::migrate::Migrator::new(migrations_dir)
         .await
         .unwrap()
         .run(pool)
-        .await;
-    match migration_results {
-        Ok(_) => println!("Migration success"),
-        Err(error) => {
-            panic!("error: {}", error);
-        }
-    }
-    println!("migration: {:?}", migration_results);
+        .await
+        .expect("Database migration failed");
+    tracing::info!("Database migration completed successfully");
 }
 
 pub async fn init_db(db_config: DbConfig, migrations_dir: &str) -> Pool<Postgres> {

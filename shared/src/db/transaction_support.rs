@@ -1,6 +1,7 @@
 use sqlx::{PgConnection, Pool, Postgres, Transaction};
 use std::ops::DerefMut;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // just copied https://github.com/kano1101/sqlx-transaction-manager/tree/main
 // and replaced MySql types with Postgres types
@@ -82,6 +83,9 @@ where
     }
 }
 
+/// Global counter for unique savepoint names, preventing conflicts when nesting.
+static SAVEPOINT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 pub async fn with_nested_transaction<F, T>(tx_ctx: &mut TxContext<'_>, f: F) -> TxResult<T>
 where
     F: for<'a> FnOnce(
@@ -89,22 +93,25 @@ where
     ) -> Pin<Box<dyn Future<Output = TxResult<T>> + Send + 'a>>,
     T: Send,
 {
+    let sp_id = SAVEPOINT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let sp_name = format!("sp_{sp_id}");
+
     // Create a savepoint
-    sqlx::query("SAVEPOINT nested_tx")
+    sqlx::query(&format!("SAVEPOINT {sp_name}"))
         .execute(tx_ctx.as_executor())
         .await?;
 
     match f(tx_ctx).await {
         Ok(result) => {
             // Release savepoint (equivalent to commit)
-            sqlx::query("RELEASE SAVEPOINT nested_tx")
+            sqlx::query(&format!("RELEASE SAVEPOINT {sp_name}"))
                 .execute(tx_ctx.as_executor())
                 .await?;
             Ok(result)
         }
         Err(e) => {
             // Rollback to savepoint
-            let _ = sqlx::query("ROLLBACK TO SAVEPOINT nested_tx")
+            let _ = sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
                 .execute(tx_ctx.as_executor())
                 .await;
             Err(e)

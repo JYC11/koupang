@@ -9,7 +9,7 @@ use crate::products::value_objects::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use shared::db::PgPool;
-use shared::db::pagination_support::{PaginationParams, PaginationQuery};
+use shared::db::pagination_support::{PaginationDirection, PaginationParams, PaginationQuery};
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
 use uuid::Uuid;
@@ -20,7 +20,7 @@ pub struct ProductFilterQuery {
     // Pagination fields
     pub limit: Option<u32>,
     pub cursor: Option<Uuid>,
-    pub direction: Option<String>,
+    pub direction: Option<PaginationDirection>,
     // Filter fields
     pub category_id: Option<Uuid>,
     pub brand_id: Option<Uuid>,

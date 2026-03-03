@@ -8,20 +8,15 @@ use uuid::Uuid;
 pub struct PaginationQuery {
     pub limit: Option<u32>,
     pub cursor: Option<Uuid>,
-    pub direction: Option<String>,
+    pub direction: Option<PaginationDirection>,
 }
 
 impl PaginationQuery {
     pub fn into_params(self) -> PaginationParams {
-        let limit = self.limit.unwrap_or(20).min(100);
-        let direction = match self.direction.as_deref() {
-            Some("backward") => PaginationDirection::Backward,
-            _ => PaginationDirection::Forward,
-        };
         PaginationParams {
-            limit,
+            limit: self.limit.unwrap_or(20).min(100),
             cursor: self.cursor,
-            direction,
+            direction: self.direction.unwrap_or(PaginationDirection::Forward),
         }
     }
 }
@@ -47,7 +42,8 @@ impl<T: Serialize> PaginatedResponse<T> {
 
 // ── Core types ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PaginationDirection {
     Forward,
     Backward,

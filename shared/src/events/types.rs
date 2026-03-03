@@ -128,12 +128,15 @@ impl std::fmt::Display for AggregateType {
 
 impl std::fmt::Display for SourceService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Match the serde lowercase format
-        let s = serde_json::to_value(self)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| format!("{:?}", self));
-        write!(f, "{}", s)
+        f.write_str(match self {
+            Self::Identity => "identity",
+            Self::Catalog => "catalog",
+            Self::Cart => "cart",
+            Self::Order => "order",
+            Self::Payment => "payment",
+            Self::Shipping => "shipping",
+            Self::Notification => "notification",
+        })
     }
 }
 

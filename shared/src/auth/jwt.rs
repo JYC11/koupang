@@ -129,18 +129,20 @@ impl JwtService {
         let decoding_key = DecodingKey::from_secret(&self.config.access_token_secret);
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = true;
+        validation.leeway = 0;
 
         let token_data = match decode::<AccessTokenClaims>(token, &decoding_key, &validation) {
             Ok(token_data) => token_data,
+            Err(e) if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) => {
+                tracing::debug!(error = %e, "Access token expired");
+                return Err(AuthError::TokenExpired);
+            }
             Err(e) => {
-                println!("{:?}", e);
+                tracing::debug!(error = %e, "Invalid access token");
                 return Err(AuthError::InvalidToken);
             }
         };
 
-        if token_data.claims.exp < Self::current_timestamp()? {
-            return Err(AuthError::TokenExpired);
-        };
         Ok(token_data.claims)
     }
 
@@ -148,18 +150,20 @@ impl JwtService {
         let decoding_key = DecodingKey::from_secret(&self.config.refresh_token_secret);
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = true;
+        validation.leeway = 0;
 
         let token_data = match decode::<RefreshTokenClaims>(token, &decoding_key, &validation) {
             Ok(token_data) => token_data,
+            Err(e) if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) => {
+                tracing::debug!(error = %e, "Refresh token expired");
+                return Err(AuthError::TokenExpired);
+            }
             Err(e) => {
-                println!("{:?}", e);
+                tracing::debug!(error = %e, "Invalid refresh token");
                 return Err(AuthError::InvalidToken);
             }
         };
 
-        if token_data.claims.exp < Self::current_timestamp()? {
-            return Err(AuthError::TokenExpired);
-        };
         Ok(token_data.claims)
     }
 

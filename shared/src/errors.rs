@@ -8,9 +8,9 @@ use thiserror::Error;
 pub enum AppError {
     #[error("Not found: {0}")]
     NotFound(String),
-    #[error("Unauthorized: {0}")]
-    Forbidden(String),
     #[error("Forbidden: {0}")]
+    Forbidden(String),
+    #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Already exists: {0}")]
     AlreadyExists(String),
