@@ -4,39 +4,18 @@
 
 ## Services
 
-| Service | Status | Responsibility | Data Owned | Docs |
-|---------|--------|---------------|------------|------|
-| shared | Complete | Shared libraries | — | [shared/CLAUDE.md](shared/CLAUDE.md) |
-| identity | Complete (115 tests) | Auth, Users, Profiles | Users, Credentials, Roles | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog | Complete (209 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md) |
-| order | Stub | Order lifecycle (state machine) | Orders, Order Items | — |
-| payment | Stub | Payment gateway, wallets | Transactions, Invoices | — |
-| shipping | Stub | Logistics, tracking | Shipments, Carriers | — |
-| notification | Stub | Emails, SMS, Push | Templates, Delivery Logs | — |
-| review | Stub | Product reviews | Reviews | — |
-| moderation | Stub | Content moderation | Moderation Log | — |
-| bff-gateway | Stub | API gateway | — | — |
-
-## Workspace Structure
-
-```
-koupang/
-├── Cargo.toml                  # workspace root
-├── Makefile
-├── docker-compose.yml
-├── .plan/                      # critical-user-flows.md, ADRs (001–009), progress summaries
-├── shared/                     # COMPLETE — see shared/CLAUDE.md
-│   └── src/                    # server, auth/, db/, config/, cache/, email/, errors, responses, test_utils/
-├── identity/                   # COMPLETE — see identity/CLAUDE.md IF you are working on identity
-├── catalog/                    # COMPLETE — see catalog/CLAUDE.md IF you are working on catalog
-├── order/                      # STUB
-├── payment/                    # STUB
-├── shipping/                   # STUB
-├── notification/               # STUB
-├── review/                     # STUB
-├── moderation/                 # STUB
-└── bff-gateway/                # STUB
-```
+| Service      | Status               | Responsibility                                   | Data Owned                                        | Docs                                     |
+| ------------ | -------------------- | ------------------------------------------------ | ------------------------------------------------- | ---------------------------------------- |
+| shared       | Complete             | Shared libraries                                 | —                                                 | [shared/CLAUDE.md](shared/CLAUDE.md)     |
+| identity     | Complete (115 tests) | Auth, Users, Profiles                            | Users, Credentials, Roles                         | [identity/CLAUDE.md](identity/CLAUDE.md) |
+| catalog      | Complete (209 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md)   |
+| order        | Stub                 | Order lifecycle (state machine)                  | Orders, Order Items                               | —                                        |
+| payment      | Stub                 | Payment gateway, wallets                         | Transactions, Invoices                            | —                                        |
+| shipping     | Stub                 | Logistics, tracking                              | Shipments, Carriers                               | —                                        |
+| notification | Stub                 | Emails, SMS, Push                                | Templates, Delivery Logs                          | —                                        |
+| review       | Stub                 | Product reviews                                  | Reviews                                           | —                                        |
+| moderation   | Stub                 | Content moderation                               | Moderation Log                                    | —                                        |
+| bff-gateway  | Stub                 | API gateway                                      | —                                                 | —                                        |
 
 ## Documentation
 
@@ -45,17 +24,19 @@ koupang/
 
 ## ADR Summary
 
-| # | Decision | Key Implication |
-|---|----------|-----------------|
-| 001 | Cargo workspace per service | Single `cargo build`, shared deps |
-| 002 | UUID v7 primary keys | Time-ordered, good B-tree locality |
-| 003 | Layered architecture | routes → service → domain → repository |
-| 004 | Testcontainers over mocks | Real Postgres 18 / Redis in tests, single-threaded |
-| 005 | JWT access + refresh tokens | Stateless access tokens, no DB lookup |
-| 006 | Email trait with mock | Decoupled from provider, `MockEmailService` for dev |
-| 007 | rust_decimal for money | `Decimal` in Rust, `NUMERIC(19,4)` in Postgres |
-| 008 | Claims-based auth downstream | Non-identity services skip user DB lookup |
+| #   | Decision                      | Key Implication                                     |
+| --- | ----------------------------- | --------------------------------------------------- |
+| 001 | Cargo workspace per service   | Single `cargo build`, shared deps                   |
+| 002 | UUID v7 primary keys          | Time-ordered, good B-tree locality                  |
+| 003 | Layered architecture          | routes → service → domain → repository              |
+| 004 | Testcontainers over mocks     | Real Postgres 18 / Redis in tests, single-threaded  |
+| 005 | JWT access + refresh tokens   | Stateless access tokens, no DB lookup               |
+| 006 | Email trait with mock         | Decoupled from provider, `MockEmailService` for dev |
+| 007 | rust_decimal for money        | `Decimal` in Rust, `NUMERIC(19,4)` in Postgres      |
+| 008 | Claims-based auth downstream  | Non-identity services skip user DB lookup           |
 | 009 | Postgres ltree for categories | Materialized path hierarchy, `<@`/`@>` tree queries |
+| 010 | Inter-service communication   | REST for queries, Kafka events for state changes    |
+| 011 | Event schema conventions      | `{svc}.{entity}.{verb}` naming, versioned envelope  |
 
 ## Tech Stack
 
@@ -82,16 +63,59 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 
 ## Patterns to Implement
 
-- Api Versioning
-- Event Driven Architecture: https://crates.io/crates/ruva
-- Transactional Outbox: https://crates.io/crates/outbox-core
-- Listen to yourself
-- Resilience: https://crates.io/crates/failsafe
-- Observability
-- Idempotency
-- API gateway/BFF
-- Background jobs: https://crates.io/crates/aj
-- CQRS
+See `.plan/human-todos.md` for full list with crate links and decision status.
+
+## Development Rules
+
+- **Every bug fix must include a test** — if a bug is found, write a regression test that would have caught it before fixing the implementation.
+- **Code Smells**
+  - god functions are bad
+  - overly fragmented functions are bad
+  - circular dependencies are bad, dependencies should be acyclic and unidirectional
+  - pass through methods: a method that only invokes another method and does nothing else is bad
+- **Development Heuristics**
+  - favour using ADTs, value objects, rich domain models to make illegal states unrepresentable 
+  - threshold for abstraction 4+ (DRY principle), 1-3 times no abstraction (YAGNI)
+    - if unsure, repeat a bit more until abstraction becomes very obvious
+  - favour efficient SQL queries, the less I/O the better
+    - use LATERAL JOINs with `json_agg`/`json_build_object` to build deduplicated child arrays and avoid cartesian products when joining parent → child entities
+    - use batch WHERE IN to get many if joining is awkward
+    - like the abstraction comment above, do SQL queries the simple way a couple times before finding patterns you can make efficient
+    - caveats: sharding and partitioning dbs can screw this up so keep this in mind
+  - modules should be deep (strong functionality but simple interfaces) and minimize unnecessary information from being shown to the user of the modules
+  - different layer, different abstraction — each layer in `routes → service → domain → repository` should operate at a distinct level of abstraction; if two adjacent layers use the same vocabulary, one is probably unnecessary
+  - define errors out of existence — prefer validated newtypes and type states so error cases can't happen; handle the remaining errors that types can't prevent
+  - in an unsure problem area, employ tactical programming (get things done focus) to figure out patterns then do a clean up of them after with strategic programming (long term maintenance focus)
+  - complexity is incremental — each small shortcut compounds; when cleaning up tactical code, fix the small things too
+  - too much specialization of purpose can make the code too complicated
+  - comment only things that are not obvious from the code
+- **Error Handling**
+  - domain/service layers return `Result<T, ServiceError>` with per-service error enums (e.g., `OrderError`)
+  - `From<ServiceError> for AppError` impl maps domain errors to HTTP responses at route boundary
+  - infrastructure errors (sqlx, redis) wrapped as `Infra(#[from] AppError)` variant
+  - `unwrap`/`expect` only in tests and provably infallible cases (e.g., compiled regex)
+  - never silently swallow errors
+- **Naming Conventions**
+
+  | Element | Convention | Example |
+  |---------|-----------|---------|
+  | Request/Response DTOs | `VerbNounRequest/Response` | `CreateProductRequest` |
+  | Service structs | `NounService` | `ProductService` |
+  | Repository structs | `NounRepository` | `ProductRepository` |
+  | Domain models | Plain noun | `Product`, `Brand` |
+  | Route functions | `verb_noun` snake_case | `create_product`, `get_product_by_id` |
+  | Modules | Plural noun directories | `products/`, `categories/` |
+  | Migrations | `NNNN_descriptive_name` | `0001_init.sql` |
+
+- **Git Workflow**
+  - commit after completing a logical unit of work (feature, fix, refactor) — not after every file edit
+  - do not push unless explicitly asked
+  - branch naming: `feat/short-description`, `fix/short-description`, `refactor/short-description`
+  - commit messages: imperative mood, `type: description` (e.g., `feat: add order state machine`, `fix: prevent double stock reservation`)
+- **Refactoring Scope**
+  - refactor in the same PR if <30 min of work; otherwise create a follow-up `br` task
+  - tactical code is fine during exploration; clean up before the feature is "done"
+- if any of the development rules are not clear, ESCALATE = stop and ask the user (or the orchestrating agent in multi-agent setups) before proceeding
 
 ## Reference Skills (auto-triggered, not manually loaded)
 
@@ -104,16 +128,6 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 - **During development**: `/simplify` to review changed code for quality, or ask directly to review specific files/modules
 - **Before merge**: `/code-review` on a PR branch for multi-agent review with confidence scoring (requires `gh` CLI)
 - **Rust-specific**: rust-skills plugin auto-triggers `m15-anti-pattern`, `coding-guidelines`, `unsafe-checker` when relevant
-
-## Local Infrastructure (docker-compose.infra.yml)
-
-| Service | Image | Host Port | Purpose |
-|---------|-------|-----------|---------|
-| Postgres | postgres:18 | 5432 | Primary data store |
-| Redis | redis:8.6 | 6379 | Cache / session / cart |
-| Kafka (KRaft) | apache/kafka:3.9 | 29092 | Event bus |
-| Kafka UI | provectuslabs/kafka-ui:0.7 | 8090 | Kafka admin UI |
-| Jaeger | jaegertracing/jaeger:2.4 | 16686 (UI), 4317 (OTLP gRPC), 4318 (OTLP HTTP) | Distributed tracing |
 
 ## Scripts
 
@@ -128,32 +142,14 @@ use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 
 All service commands accept `SERVICE=all` to run against every service. The scripts handle the `shared` crate's `--features test-utils` flag automatically.
 
-## Prompt logging
+## Prompt Logging
 
-- At the END of every session, log all user prompts to `~/.claude/llm_usage_logging_folder/session-log-YYYY-MM-DD.md`
-- This is for blogging purposes — logs will be used in blog posts about LLM usage
-- **Format** (append per session):
-  ```
-  ## Session N — HH:MM
+- At session END, append to `~/.claude/llm_usage_logging_folder/session-log-YYYY-MM-DD.md`
+- Format: `## Session N — HH:MM` header, numbered user prompts, one-paragraph summary
+- Omit: raw JSON, system messages, hook payloads, code blocks around prompts
 
-  ### User Prompts
-  1. first prompt text
-  2. second prompt text
+## Session & Task Management
 
-  ### Summary
-  One paragraph of what was accomplished.
-  ```
-- **Do NOT** include: raw JSON, system messages, hook payloads, timestamps per prompt, or code blocks around prompts
-- Raw hook data may be appended automatically by hooks — that's fine, but the clean summary section above is what matters for blogging
-
-## Session Start
-
-After loading project context (`/project-context`), always also:
-1. Load the `br` skill and run `br list` to see current task state
-2. This replaces the need to separately invoke `/br`
-
-## Task management
-
-- beads_rust: https://github.com/Dicklesworthstone/beads_rust
-- **Always load the `br` skill (Skill tool) before running any `br` CLI commands.** Do not guess at br syntax — the skill has the complete command reference.
-- After plan approval, create br tasks to track implementation work.
+- At session start: load `/project-context`, then load `br` skill and run `br list`
+- After plan approval, create `br` tasks to track work
+- `br` reference: https://github.com/Dicklesworthstone/beads_rust
