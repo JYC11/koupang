@@ -43,6 +43,7 @@ fn order_envelope(aggregate_id: Uuid) -> EventEnvelope {
 fn fast_relay_config() -> RelayConfig {
     RelayConfig {
         poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(1),
         stale_lock_timeout: Duration::from_secs(2),
         cleanup_interval: Duration::from_secs(3600),
         batch_size: 50,
@@ -411,6 +412,7 @@ async fn relay_releases_stale_locks() {
     // Start relay with short stale lock timeout
     let publisher = Arc::new(KafkaEventPublisher::new(&config).unwrap());
     let mut relay_config = fast_relay_config();
+    relay_config.stale_lock_check_interval = Duration::from_millis(250);
     relay_config.stale_lock_timeout = Duration::from_millis(500);
     let shutdown = start_relay(db.pool.clone(), publisher, relay_config);
 

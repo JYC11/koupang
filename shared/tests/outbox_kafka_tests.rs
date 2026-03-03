@@ -69,7 +69,7 @@ async fn relay_full_cycle_insert_claim_publish_consume() {
     let envelope = order_envelope(agg_id);
     let insert = OutboxInsert::from_envelope(&topic, &envelope);
     let outbox_row = insert_outbox_event(&db.pool, &insert).await.unwrap();
-    assert_eq!(outbox_row.status, "pending");
+    assert_eq!(outbox_row.status, shared::outbox::OutboxStatus::Pending);
 
     // 2. Relay claims the batch
     let claimed = claim_batch(&db.pool, 10, "relay-1").await.unwrap();

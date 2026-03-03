@@ -90,16 +90,19 @@ impl OutboxRelay {
                             tracing::debug!("Relay woken by PG notification");
                         }
                         Err(e) => {
-                            tracing::warn!(error = %e, "PgListener error, falling back to polling");
-                            listener = None;
+                            tracing::warn!(error = %e, "PgListener error, attempting reconnect");
+                            listener = Self::connect_listener(&relay.pool).await;
                         }
                         _ => {}
                     }
                 }
 
-                // Fallback polling interval
+                // Fallback polling interval — also attempt PgListener reconnect if disconnected
                 _ = tokio::time::sleep(relay.config.poll_interval) => {
                     tracing::trace!("Relay woken by poll interval");
+                    if listener.is_none() {
+                        listener = Self::connect_listener(&relay.pool).await;
+                    }
                 }
             }
 
@@ -117,7 +120,12 @@ impl OutboxRelay {
                 Ok(0) => return,
                 Ok(_) => continue,
                 Err(e) => {
-                    tracing::error!(error = %e, "Error processing outbox batch");
+                    tracing::error!(error = %e, "Error processing outbox batch, backing off 1s");
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    }
                     return;
                 }
             }
@@ -136,8 +144,13 @@ impl OutboxRelay {
         let count = events.len();
         tracing::debug!(count, "Processing outbox batch");
 
-        for event in &events {
-            match self.publish_event(event).await {
+        for mut event in events {
+            // Take ownership of payload to avoid cloning the (potentially large) JSON tree.
+            // The event struct remains intact with Value::Null in the payload field,
+            // which is fine since we only use metadata fields after this point.
+            let payload = std::mem::take(&mut event.payload);
+
+            match self.publish_payload(&event.topic, payload).await {
                 Ok(()) => {
                     if self.config.delete_on_publish {
                         delete_published(&self.pool, event.id).await?;
@@ -162,7 +175,7 @@ impl OutboxRelay {
 
                     // Check if this failure will exhaust retries (mirrors the SQL CASE)
                     if event.retry_count + 1 >= event.max_retries {
-                        self.escalate_failure(event).await;
+                        self.escalate_failure(&event).await;
                     }
 
                     mark_retry_or_failed(&self.pool, event.id, &error_msg).await?;
@@ -173,13 +186,17 @@ impl OutboxRelay {
         Ok(count)
     }
 
-    /// Deserialize the outbox payload into an EventEnvelope and publish to Kafka.
-    async fn publish_event(&self, event: &OutboxEvent) -> Result<(), AppError> {
-        let envelope: EventEnvelope =
-            serde_json::from_value(event.payload.clone()).map_err(|e| {
-                AppError::InternalServerError(format!("Deserialize outbox payload: {e}"))
-            })?;
-        self.publisher.publish(&event.topic, &envelope).await
+    /// Deserialize an outbox payload into an EventEnvelope and publish to Kafka.
+    /// Takes ownership of the payload Value to avoid cloning.
+    async fn publish_payload(
+        &self,
+        topic: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), AppError> {
+        let envelope: EventEnvelope = serde_json::from_value(payload).map_err(|e| {
+            AppError::InternalServerError(format!("Deserialize outbox payload: {e}"))
+        })?;
+        self.publisher.publish(topic, &envelope).await
     }
 
     /// Invoke the configured failure escalation handler (or the default log handler).
@@ -211,7 +228,7 @@ impl OutboxRelay {
                     tracing::info!("Stale lock loop: shutdown signal received");
                     return;
                 }
-                _ = tokio::time::sleep(relay.config.stale_lock_timeout) => {}
+                _ = tokio::time::sleep(relay.config.stale_lock_check_interval) => {}
             }
 
             match release_stale_locks(&relay.pool, timeout_secs).await {

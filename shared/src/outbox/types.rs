@@ -39,7 +39,7 @@ pub struct OutboxEvent {
     pub partition_key: String,
     pub payload: serde_json::Value,
     pub metadata: Option<serde_json::Value>,
-    pub status: String,
+    pub status: OutboxStatus,
     pub published_at: Option<DateTime<Utc>>,
     pub locked_by: Option<String>,
     pub locked_at: Option<DateTime<Utc>>,
@@ -124,24 +124,28 @@ impl FailureEscalation for LogFailureEscalation {
 
 // ── Trace context propagation ────────────────────────────────────────
 
-/// Captures the current OpenTelemetry span context into a JSON map
+/// Captures the current tracing span context into a JSON map
 /// suitable for the outbox `metadata` column.
 ///
 /// Returns `None` if there is no active span (avoids storing empty metadata).
 /// The relay later injects this as Kafka headers so downstream consumers
 /// can continue the same distributed trace.
+///
+/// Currently captures tracing-level context (span ID, name, target, module).
+/// Will be upgraded to full W3C traceparent/tracestate propagation once
+/// the OpenTelemetry SDK is integrated (bd-8fc).
 pub fn capture_trace_context() -> Option<serde_json::Value> {
     use tracing::Span;
 
     let span = Span::current();
-
-    // For now we capture a lightweight placeholder using the tracing span's metadata,
-    // which will be upgraded to full W3C traceparent once the OTLP exporter (bd-8fc) lands.
     let span_meta = span.metadata()?;
+    let span_id = span.id().map(|id| id.into_u64());
 
     Some(serde_json::json!({
         "span_name": span_meta.name(),
         "span_target": span_meta.target(),
+        "span_id": span_id,
+        "span_module_path": span_meta.module_path(),
     }))
 }
 
@@ -234,7 +238,7 @@ mod tests {
             partition_key: Uuid::now_v7().to_string(),
             payload: json!({}),
             metadata: None,
-            status: "failed".to_string(),
+            status: OutboxStatus::Failed,
             published_at: None,
             locked_by: None,
             locked_at: None,
@@ -260,6 +264,8 @@ mod tests {
         assert!(ctx.is_some());
         let map = ctx.unwrap();
         assert_eq!(map.get("span_name").unwrap(), "test_span");
+        assert!(map.get("span_id").is_some());
+        assert!(map.get("span_module_path").is_some());
     }
 
     #[test]

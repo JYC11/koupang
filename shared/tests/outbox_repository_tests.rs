@@ -41,7 +41,7 @@ async fn insert_outbox_event_creates_row() {
     assert_eq!(row.partition_key, agg_id.to_string());
     assert_eq!(row.payload, json!({"test": true}));
     assert!(row.metadata.is_none());
-    assert_eq!(row.status, "pending");
+    assert_eq!(row.status, shared::outbox::OutboxStatus::Pending);
     assert!(row.published_at.is_none());
     assert!(row.locked_by.is_none());
     assert!(row.locked_at.is_none());

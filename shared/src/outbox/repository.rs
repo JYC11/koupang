@@ -159,18 +159,17 @@ pub async fn release_stale_locks(
     executor: impl sqlx::PgExecutor<'_>,
     stale_timeout_secs: i64,
 ) -> Result<u64, AppError> {
-    let interval_str = format!("{stale_timeout_secs} seconds");
     let result = sqlx::query(
         r#"
         UPDATE outbox_events
         SET locked_by = NULL,
             locked_at = NULL
         WHERE locked_by IS NOT NULL
-          AND locked_at < NOW() - $1::interval
+          AND locked_at < NOW() - make_interval(secs => $1::float8)
           AND status = 'pending'
         "#,
     )
-    .bind(&interval_str)
+    .bind(stale_timeout_secs)
     .execute(executor)
     .await
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;
@@ -185,15 +184,14 @@ pub async fn cleanup_published(
     executor: impl sqlx::PgExecutor<'_>,
     max_age_secs: i64,
 ) -> Result<u64, AppError> {
-    let interval_str = format!("{max_age_secs} seconds");
     let result = sqlx::query(
         r#"
         DELETE FROM outbox_events
         WHERE status = 'published'
-          AND published_at < NOW() - $1::interval
+          AND published_at < NOW() - make_interval(secs => $1::float8)
         "#,
     )
-    .bind(&interval_str)
+    .bind(max_age_secs)
     .execute(executor)
     .await
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;

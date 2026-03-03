@@ -20,8 +20,8 @@ CREATE TABLE outbox_events (
     CONSTRAINT chk_outbox_status CHECK (status IN ('pending', 'published', 'failed'))
 );
 
--- Hot path: relay claims pending events (oldest per aggregate)
-CREATE INDEX idx_outbox_pending ON outbox_events (aggregate_id, created_at)
+-- Hot path: relay claims pending events (oldest per aggregate, respects next_retry_at)
+CREATE INDEX idx_outbox_pending ON outbox_events (next_retry_at, aggregate_id, created_at)
     WHERE status = 'pending';
 
 -- Cleanup: find old published events
