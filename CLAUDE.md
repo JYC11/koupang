@@ -150,6 +150,6 @@ All service commands accept `SERVICE=all` to run against every service. The scri
 
 ## Session & Task Management
 
-- At session start: load `/project-context`, then load `br` skill and run `br list`
-- After plan approval, create `br` tasks to track work
-- `br` reference: https://github.com/Dicklesworthstone/beads_rust
+- At session start: load `/project-context`, then load `/filament` skill and run `fl task ready`
+- After plan approval, create `fl` tasks to track work
+- Filament reference: https://github.com/JYC11/filament
