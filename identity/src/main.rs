@@ -2,36 +2,31 @@ use identity::AppState;
 use identity::app;
 use identity::users::grpc_service::IdentityGrpcService;
 use shared::grpc::identity::identity_service_server::IdentityServiceServer;
-use shared::health::health_routes;
-use shared::server::{GrpcConfig, ServiceConfig, run_service_with_infra};
+use shared::server::{GrpcConfig, ServiceBuilder};
 use std::error::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    run_service_with_infra(
-        ServiceConfig {
-            name: "identity",
-            port_env_key: "IDENTITY_PORT",
-            db_url_env_key: "IDENTITY_DB_URL",
-            migrations_dir: "./migrations",
-        },
-        Some((
+    ServiceBuilder::new("identity")
+        .http_port_env("IDENTITY_PORT")
+        .db_url_env("IDENTITY_DB_URL")
+        .with_redis()
+        .run_with_grpc(
             GrpcConfig {
                 port_env_key: "IDENTITY_GRPC_PORT",
                 default_port: 50051,
             },
-            |pool, addr| async move {
-                let svc = IdentityGrpcService::new(pool);
+            |infra| {
+                let app_state = AppState::new(infra.db.clone(), infra.redis.clone());
+                app(app_state)
+            },
+            |infra, addr| async move {
+                let svc = IdentityGrpcService::new(infra.db);
                 tonic::transport::Server::builder()
                     .add_service(IdentityServiceServer::new(svc))
                     .serve(addr)
                     .await
             },
-        )),
-        |pool, redis_conn| {
-            let app_state = AppState::new(pool, redis_conn);
-            app(app_state).merge(health_routes("identity"))
-        },
-    )
-    .await
+        )
+        .await
 }

@@ -18,26 +18,22 @@ Use catalog as the reference implementation. Execute these steps in order.
    ```rust
    use <service>::AppState;
    use <service>::app;
-   use shared::health::health_routes;
-   use shared::server::{NoGrpc, ServiceConfig, run_service_with_infra};
+   use shared::server::ServiceBuilder;
 
    #[tokio::main]
    async fn main() -> Result<(), Box<dyn Error>> {
-       run_service_with_infra(
-           ServiceConfig {
-               name: "<service>",
-               port_env_key: "<SERVICE>_PORT",
-               db_url_env_key: "<SERVICE>_DB_URL",
-               migrations_dir: "./.migrations/<service>",
-           },
-           None::<NoGrpc>,
-           |pool, redis_conn| {
-               let app_state = AppState::new(pool, redis_conn);
-               app(app_state).merge(health_routes("<service>"))
-           },
-       ).await
+       ServiceBuilder::new("<service>")
+           .http_port_env("<SERVICE>_PORT")
+           .db_url_env("<SERVICE>_DB_URL")
+           .with_redis()
+           .run(|infra| {
+               let app_state = AppState::new(infra.db.clone(), infra.redis.clone());
+               app(app_state)
+           })
+           .await
    }
    ```
+   Health routes are merged automatically by `ServiceBuilder`.
 
 3. **Create `src/lib.rs`** — define `AppState` (wraps `Arc<Service>` + `Arc<JwtService>`) and `app()` fn
 

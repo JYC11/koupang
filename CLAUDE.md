@@ -49,7 +49,7 @@
 ## Key Shared Imports
 
 ```rust
-use shared::server::{run_service_with_infra, ServiceConfig, NoGrpc};
+use shared::server::{ServiceBuilder, Infra, GrpcConfig};
 use shared::auth::jwt::{JwtService, CurrentUser};
 use shared::auth::middleware::AuthMiddleware;   // ::new() or ::new_claims_based()
 use shared::auth::guards::{require_access, require_admin};

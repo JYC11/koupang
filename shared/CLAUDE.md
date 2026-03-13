@@ -7,7 +7,7 @@ Reusable libraries and infrastructure code shared across all microservices.
 ```
 shared/src/
 ├── lib.rs                     # re-exports all modules
-├── server.rs                  # run_service_with_infra(), ServiceConfig, GrpcConfig, NoGrpc
+├── server.rs                  # ServiceBuilder, Infra, GrpcConfig — composable service bootstrap
 ├── observability.rs           # init_tracing()
 ├── health.rs                  # health_routes() → GET /health
 ├── errors.rs                  # AppError enum → IntoResponse
@@ -63,7 +63,7 @@ shared/src/
 
 | Module | Key exports |
 |--------|-------------|
-| `server` | `run_service_with_infra(ServiceConfig, grpc, build_app)` — full bootstrap |
+| `server` | `ServiceBuilder::new(name).http_port_env().db_url_env().with_redis().run(build_app)` — composable bootstrap; `.run_with_grpc()` for gRPC sidecar; `Infra { db, redis }` passed to closures |
 | `db` | `init_db()`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
 | `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `HasId` trait |
