@@ -36,6 +36,7 @@ shared/src/
 │   ├── admin.rs               # KafkaAdmin, TopicSpec — idempotent topic creation
 │   ├── producer.rs            # KafkaEventPublisher — impl EventPublisher via rdkafka
 │   ├── consumer.rs            # KafkaEventConsumer, EventHandler, HandlerError, ConsumerConfig — consumer with DLQ
+│   ├── health.rs              # KafkaHealthChecker, KafkaHealth, KafkaHealthStatus — broker connectivity check
 │   ├── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
 │   └── mock_handler.rs        # MockEventHandler (test-utils) — queued results + received tracking
 ├── outbox/
@@ -73,7 +74,7 @@ shared/src/
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
-| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler` |
+| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |

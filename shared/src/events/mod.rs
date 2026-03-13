@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod consumer;
+pub mod health;
 mod producer;
 mod publisher;
 mod types;
@@ -7,6 +8,7 @@ mod types;
 pub use crate::config::consumer_config::ConsumerConfig;
 pub use admin::{KafkaAdmin, TopicSpec};
 pub use consumer::{EventHandler, HandlerError, KafkaEventConsumer};
+pub use health::{KafkaHealth, KafkaHealthChecker, KafkaHealthStatus};
 pub use producer::KafkaEventPublisher;
 pub use publisher::EventPublisher;
 pub use types::{AggregateType, EventEnvelope, EventMetadata, EventType, SourceService};
