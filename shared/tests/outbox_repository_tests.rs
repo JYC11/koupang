@@ -1298,6 +1298,25 @@ async fn large_payload_round_trip() {
     assert_eq!(batch[0].payload, payload);
 }
 
+/// Oversized payload is rejected before hitting the DB.
+#[tokio::test]
+async fn insert_rejects_oversized_payload() {
+    let db = TestDb::start("./tests/migrations").await;
+    let agg_id = Uuid::now_v7();
+
+    let mut insert = test_insert("t", agg_id);
+    // 901 KB of data — exceeds the 900 KB guard
+    insert.payload = json!({ "data": "x".repeat(901_000) });
+
+    let result = insert_outbox_event(&db.pool, &insert).await;
+    assert!(result.is_err(), "oversized payload should be rejected");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("too large"),
+        "error should mention size: {err}"
+    );
+}
+
 /// Multiple events inserted within the same transaction are all visible after commit.
 #[tokio::test]
 async fn events_inserted_in_transaction_visible_after_commit() {

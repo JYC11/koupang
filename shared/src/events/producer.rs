@@ -17,7 +17,7 @@ impl KafkaEventPublisher {
     pub fn new(config: &KafkaConfig) -> Result<Self, AppError> {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", &config.brokers)
-            .set("message.timeout.ms", "5000")
+            .set("message.timeout.ms", "30000")
             .create()
             .map_err(|e| AppError::InternalServerError(format!("Kafka producer init: {e}")))?;
 

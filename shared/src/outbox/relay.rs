@@ -133,6 +133,10 @@ impl OutboxRelay {
     }
 
     /// Claim a batch, publish each event, and update status. Returns the number of events processed.
+    ///
+    /// Individual event DB updates (mark_published, mark_retry_or_failed) do NOT abort the batch.
+    /// On DB error for a single event, the error is logged and the loop continues. The event
+    /// remains locked and will be freed by the stale lock recovery loop.
     async fn process_batch(&self) -> Result<usize, AppError> {
         let events =
             claim_batch(&self.pool, self.config.batch_size, &self.config.instance_id).await?;
@@ -152,10 +156,18 @@ impl OutboxRelay {
 
             match self.publish_payload(&event.topic, payload).await {
                 Ok(()) => {
-                    if self.config.delete_on_publish {
-                        delete_published(&self.pool, event.id).await?;
+                    let update_result = if self.config.delete_on_publish {
+                        delete_published(&self.pool, event.id).await
                     } else {
-                        mark_published(&self.pool, event.id).await?;
+                        mark_published(&self.pool, event.id).await
+                    };
+                    if let Err(db_err) = update_result {
+                        tracing::error!(
+                            event_id = %event.event_id,
+                            error = %db_err,
+                            "Failed to mark outbox event as published, stale lock recovery will free it"
+                        );
+                        continue;
                     }
                     tracing::debug!(
                         event_id = %event.event_id,
@@ -173,12 +185,23 @@ impl OutboxRelay {
                         "Failed to publish outbox event"
                     );
 
-                    // Check if this failure will exhaust retries (mirrors the SQL CASE)
-                    if event.retry_count + 1 >= event.max_retries {
-                        self.escalate_failure(&event).await;
+                    match mark_retry_or_failed(&self.pool, event.id, &error_msg).await {
+                        Ok(()) => {
+                            // Escalate only AFTER the status transition succeeds.
+                            // This prevents spurious escalations when the DB update fails
+                            // (the event stays pending and would be re-escalated on next attempt).
+                            if event.retry_count + 1 >= event.max_retries {
+                                self.escalate_failure(&event).await;
+                            }
+                        }
+                        Err(db_err) => {
+                            tracing::error!(
+                                event_id = %event.event_id,
+                                error = %db_err,
+                                "Failed to update retry status, stale lock recovery will free it"
+                            );
+                        }
                     }
-
-                    mark_retry_or_failed(&self.pool, event.id, &error_msg).await?;
                 }
             }
         }

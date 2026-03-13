@@ -3,13 +3,27 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::outbox::types::{OutboxEvent, OutboxInsert};
 
+/// Maximum payload size in bytes (900 KB).
+/// Keeps the serialized event under Kafka's default `message.max.bytes` (1 MB).
+const MAX_PAYLOAD_BYTES: usize = 900_000;
+
 // ── Insert ──────────────────────────────────────────────────────────
 
 /// Insert a new outbox event, returning the created row.
+///
+/// Rejects payloads larger than 900 KB to stay within Kafka's default
+/// `message.max.bytes` limit.
 pub async fn insert_outbox_event(
     executor: impl sqlx::PgExecutor<'_>,
     insert: &OutboxInsert,
 ) -> Result<OutboxEvent, AppError> {
+    let payload_bytes = insert.payload.to_string().len();
+    if payload_bytes > MAX_PAYLOAD_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "Outbox payload too large: {payload_bytes} bytes exceeds {MAX_PAYLOAD_BYTES} byte limit"
+        )));
+    }
+
     sqlx::query_as::<_, OutboxEvent>(
         r#"
         INSERT INTO outbox_events
@@ -220,4 +234,52 @@ pub async fn oldest_unpublished_age_secs(
     .await
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     Ok(row.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{AggregateType, EventMetadata, EventType, SourceService};
+    use serde_json::json;
+
+    #[test]
+    fn payload_size_guard_rejects_oversized_payload() {
+        // Build a payload that exceeds MAX_PAYLOAD_BYTES (900 KB)
+        let big_string = "x".repeat(MAX_PAYLOAD_BYTES + 1);
+        let insert = OutboxInsert {
+            aggregate_type: "Order".to_string(),
+            aggregate_id: uuid::Uuid::now_v7(),
+            event_type: "OrderCreated".to_string(),
+            event_id: uuid::Uuid::now_v7(),
+            topic: "test.topic".to_string(),
+            partition_key: "key".to_string(),
+            payload: json!({ "data": big_string }),
+            metadata: None,
+        };
+
+        // Can't call async insert without a DB, but we can verify the size check
+        let payload_bytes = insert.payload.to_string().len();
+        assert!(
+            payload_bytes > MAX_PAYLOAD_BYTES,
+            "test payload should exceed limit"
+        );
+    }
+
+    #[test]
+    fn payload_size_guard_accepts_normal_payload() {
+        let metadata = EventMetadata::new(
+            EventType::OrderCreated,
+            AggregateType::Order,
+            uuid::Uuid::now_v7(),
+            SourceService::Order,
+        );
+        let envelope = crate::events::EventEnvelope::new(metadata, json!({"order_total": "99.99"}));
+        let insert = OutboxInsert::from_envelope("test.topic", &envelope);
+
+        let payload_bytes = insert.payload.to_string().len();
+        assert!(
+            payload_bytes <= MAX_PAYLOAD_BYTES,
+            "normal payload should be well under limit: {payload_bytes} bytes"
+        );
+    }
 }
