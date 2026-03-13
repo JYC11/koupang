@@ -14,7 +14,7 @@ File: `docker-compose.infra.yml`
 
 ```yaml
 kafka:
-  image: apache/kafka:3.9.0
+  image: apache/kafka-native:3.9.2
   container_name: koupang-kafka
   environment:
     KAFKA_NODE_ID: 1
@@ -32,10 +32,11 @@ kafka:
   ports:
     - "29092:29092"
   healthcheck:
-    test: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
-    interval: 10s
-    timeout: 10s
-    retries: 5
+    test: ["CMD-SHELL", "bash -c 'cat < /dev/tcp/localhost/9092 &>/dev/null'"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+    start_period: 5s
 ```
 
 ### Kafka UI

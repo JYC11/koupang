@@ -27,14 +27,17 @@ shared/src/
 │   ├── auth_config.rs         # AuthConfig::new(), ::for_tests()
 │   ├── redis_config.rs        # RedisConfig::new(), ::try_new()
 │   ├── kafka_config.rs        # KafkaConfig::new(), ::from_brokers(), Default
-│   └── relay_config.rs        # RelayConfig::from_env(), Default
+│   ├── relay_config.rs        # RelayConfig::from_env(), Default
+│   └── consumer_config.rs     # ConsumerConfig::new(group_id, topics), ::from_env()
 ├── events/
 │   ├── mod.rs                 # re-exports
 │   ├── types.rs               # EventEnvelope, EventMetadata, EventType, AggregateType, SourceService
 │   ├── publisher.rs           # EventPublisher trait (async publish)
 │   ├── admin.rs               # KafkaAdmin, TopicSpec — idempotent topic creation
 │   ├── producer.rs            # KafkaEventPublisher — impl EventPublisher via rdkafka
-│   └── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
+│   ├── consumer.rs            # KafkaEventConsumer, EventHandler, HandlerError, ConsumerConfig — consumer with DLQ
+│   ├── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
+│   └── mock_handler.rs        # MockEventHandler (test-utils) — queued results + received tracking
 ├── outbox/
 │   ├── mod.rs                 # re-exports
 │   ├── types.rs               # OutboxEvent, OutboxInsert, OutboxStatus, FailureEscalation trait
@@ -66,11 +69,11 @@ shared/src/
 | `auth::middleware` | `AuthMiddleware::new(jwt, user_lookup)` (identity), `::new_claims_based(jwt)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
 | `auth::role` | `Role` — Buyer, Seller, Admin |
-| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`) |
+| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`), `ConsumerConfig` (`.new(group_id, topics)` / `.from_env()`) |
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
-| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec` |
+| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
@@ -210,6 +213,44 @@ let envelope = msg.envelope();              // deserialize payload as EventEnvel
 assert_eq!(msg.headers["event_type"], "OrderCreated");
 ```
 
+## Kafka Event Consumer (events::consumer)
+
+Consumer with transactional idempotency and dead-letter queue (DLQ) support.
+
+### Implementing a consumer
+
+```rust
+use shared::events::{KafkaEventConsumer, EventHandler, HandlerError, ConsumerConfig, EventEnvelope};
+use shared::config::kafka_config::KafkaConfig;
+use tokio_util::sync::CancellationToken;
+
+// 1. Implement EventHandler
+struct MyHandler;
+
+#[async_trait::async_trait]
+impl EventHandler for MyHandler {
+    async fn handle(&self, envelope: &EventEnvelope, tx: &mut sqlx::PgConnection) -> Result<(), HandlerError> {
+        match envelope.metadata.event_type {
+            EventType::OrderCreated => { /* handle in tx */ Ok(()) }
+            _ => Err(HandlerError::permanent("unknown event type"))
+        }
+    }
+}
+
+// 2. Configure and run
+let config = ConsumerConfig::new("order-consumer", vec!["order.events".into()]);
+let consumer = KafkaEventConsumer::new(&kafka_config, config, Arc::new(MyHandler), pool)?;
+consumer.run(shutdown_token).await;
+```
+
+### Processing guarantees
+
+- **At-least-once delivery** — offset committed after handler success or DLQ publish
+- **Transactional idempotency** — handler runs inside a DB transaction with `processed_events` marker; committed atomically
+- **Inline retry** — transient errors get up to `max_retries` attempts with exponential backoff (1s, 2s, 4s default)
+- **Per-source-topic DLQ** — failed events go to `{topic}.dlq` with headers: `dlq_reason`, `dlq_retry_count`, `dlq_original_topic`, `dlq_timestamp`, `dlq_consumer_group`
+- **Graceful shutdown** — finishes in-flight message, skips remaining retries
+
 ## Key Traits to Implement Per Service
 
 | Trait | Module | When |
@@ -218,4 +259,5 @@ assert_eq!(msg.headers["event_type"], "OrderCreated");
 | `GetCurrentUser` | `auth::middleware` | Identity service only (others use claims-based) |
 | `EmailService` | `email` | If service sends emails (use `MockEmailService` for dev) |
 | `EventPublisher` | `events::publisher` | Publish events to Kafka (use `MockEventPublisher` for tests) |
+| `EventHandler` | `events::consumer` | Consume events from Kafka (use `MockEventHandler` for tests) |
 | `FailureEscalation` | `outbox::types` | Handle permanently failed outbox events (default: `LogFailureEscalation`) |
