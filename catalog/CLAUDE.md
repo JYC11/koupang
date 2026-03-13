@@ -80,13 +80,24 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 - **List filters:** `category_id`, `brand_id`, `min_price`, `max_price`, `search` (ILIKE), `status` (seller/me only)
 - **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + `keyset_paginate()` via QueryBuilder
 
+## Redis Caching
+
+Product read endpoints are cached in Redis (5-minute TTL, gracefully degrades without Redis):
+
+| Endpoint | Cache Key | Evicted By |
+|----------|-----------|------------|
+| GET `/{id}` (detail) | `product:{uuid}` | update/delete product, create/update/delete SKU, adjust stock, add/delete image |
+| GET `/slug/{slug}` | `product:slug:{slug}` | update/delete product |
+
+Lists are **not cached** (paginated + filtered = poor hit rate).
+
 ## Env Vars
 
 `CATALOG_DB_URL`, `CATALOG_PORT` (default 3000), `REDIS_URL` (optional), `ACCESS_TOKEN_SECRET`
 
 ## Tests
 
-58 unit + 77 integration = 135 tests. `make test SERVICE=catalog`
+58 unit + 83 integration = 141 tests. `make test SERVICE=catalog`
 
 Test layers follow `/test-guide` skill:
 - Repository (16): internal helpers (has_products, has_children, FK exists, is_brand_in_category), JOIN behavior, ltree paths, soft deletes, stock adjustment SQL, CHECK constraints

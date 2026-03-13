@@ -20,9 +20,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: PgPool, _redis_conn: Option<redis::aio::ConnectionManager>) -> Self {
+    pub fn new(pool: PgPool, redis_conn: Option<redis::aio::ConnectionManager>) -> Self {
         Self {
-            service: Arc::new(CatalogService::new(pool.clone())),
+            service: Arc::new(CatalogService::new(pool.clone(), redis_conn)),
             category_service: Arc::new(CategoryService::new(pool.clone())),
             brand_service: Arc::new(BrandService::new(pool)),
             jwt_service: Arc::new(JwtService::new(AuthConfig::new())),
@@ -31,7 +31,7 @@ impl AppState {
 
     pub fn new_with_jwt(pool: PgPool, auth_config: AuthConfig) -> Self {
         Self {
-            service: Arc::new(CatalogService::new(pool.clone())),
+            service: Arc::new(CatalogService::new(pool.clone(), None)),
             category_service: Arc::new(CategoryService::new(pool.clone())),
             brand_service: Arc::new(BrandService::new(pool)),
             jwt_service: Arc::new(JwtService::new(auth_config)),

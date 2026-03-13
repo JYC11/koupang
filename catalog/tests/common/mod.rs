@@ -21,7 +21,14 @@ pub async fn test_db() -> TestDb {
 }
 
 pub fn test_catalog_service(pool: PgPool) -> CatalogService {
-    CatalogService::new(pool)
+    CatalogService::new(pool, None)
+}
+
+pub fn test_catalog_service_with_redis(
+    pool: PgPool,
+    redis_conn: redis::aio::ConnectionManager,
+) -> CatalogService {
+    CatalogService::new(pool, Some(redis_conn))
 }
 
 pub fn test_category_service(pool: PgPool) -> CategoryService {

@@ -14,13 +14,58 @@ use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use uuid::Uuid;
 
+const PRODUCT_CACHE_TTL: u64 = 300; // 5 minutes
+
 pub struct CatalogService {
     pool: PgPool,
+    redis_conn: Option<redis::aio::ConnectionManager>,
 }
 
 impl CatalogService {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, redis_conn: Option<redis::aio::ConnectionManager>) -> Self {
+        Self { pool, redis_conn }
+    }
+
+    // ── Cache helpers ─────────────────────────────────────────
+
+    fn product_detail_key(id: ProductId) -> String {
+        format!("product:{}", id.value())
+    }
+
+    fn product_slug_key(slug: &str) -> String {
+        format!("product:slug:{slug}")
+    }
+
+    async fn get_cached<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        use redis::AsyncCommands;
+        let conn = self.redis_conn.as_ref()?;
+        let data: String = conn.clone().get(key).await.ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    async fn set_cached<T: serde::Serialize>(&self, key: &str, value: &T) {
+        use redis::AsyncCommands;
+        let Some(ref conn) = self.redis_conn else {
+            return;
+        };
+        let Ok(data) = serde_json::to_string(value) else {
+            return;
+        };
+        let _: Result<(), _> = conn.clone().set_ex(key, &data, PRODUCT_CACHE_TTL).await;
+    }
+
+    async fn evict_cached(&self, key: &str) {
+        use redis::AsyncCommands;
+        let Some(ref conn) = self.redis_conn else {
+            return;
+        };
+        let _: Result<(), _> = conn.clone().del(key).await;
+    }
+
+    /// Evict both detail and slug caches for a product.
+    async fn evict_product_caches(&self, id: ProductId, slug: &str) {
+        self.evict_cached(&Self::product_detail_key(id)).await;
+        self.evict_cached(&Self::product_slug_key(slug)).await;
     }
 
     // ── Products ────────────────────────────────────────────
@@ -53,20 +98,35 @@ impl CatalogService {
     }
 
     pub async fn get_product_by_slug(&self, slug: &str) -> Result<ProductRes, AppError> {
+        let cache_key = Self::product_slug_key(slug);
+        if let Some(cached) = self.get_cached::<ProductRes>(&cache_key).await {
+            return Ok(cached);
+        }
+
         let product = repository::get_product_by_slug(&self.pool, slug).await?;
-        Ok(ProductRes::new(product))
+        let res = ProductRes::new(product);
+        self.set_cached(&cache_key, &res).await;
+        Ok(res)
     }
 
     pub async fn get_product_detail(&self, id: ProductId) -> Result<ProductDetailRes, AppError> {
+        let cache_key = Self::product_detail_key(id);
+        if let Some(cached) = self.get_cached::<ProductDetailRes>(&cache_key).await {
+            return Ok(cached);
+        }
+
         let product = repository::get_product_by_id(&self.pool, id).await?;
         let skus = repository::list_skus_by_product(&self.pool, id).await?;
         let images = repository::list_images_by_product(&self.pool, id).await?;
 
-        Ok(ProductDetailRes {
+        let detail = ProductDetailRes {
             product: ProductRes::new(product),
             skus: skus.into_iter().map(SkuRes::new).collect(),
             images: images.into_iter().map(ProductImageRes::new).collect(),
-        })
+        };
+
+        self.set_cached(&cache_key, &detail).await;
+        Ok(detail)
     }
 
     pub async fn list_products_by_seller(
@@ -114,6 +174,7 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update product: {}", e)))?;
 
+        self.evict_product_caches(product_id, &product.slug).await;
         Ok(())
     }
 
@@ -135,6 +196,7 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete product: {}", e)))?;
 
+        self.evict_product_caches(product_id, &product.slug).await;
         Ok(())
     }
 
@@ -160,6 +222,9 @@ impl CatalogService {
         })
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to create SKU: {}", e)))?;
+
+        self.evict_cached(&Self::product_detail_key(product_id))
+            .await;
 
         let sku = repository::get_sku_by_id(&self.pool, sku_id).await?;
         Ok(SkuRes::new(sku))
@@ -193,6 +258,8 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update SKU: {}", e)))?;
 
+        self.evict_cached(&Self::product_detail_key(ProductId::new(sku.product_id)))
+            .await;
         Ok(())
     }
 
@@ -216,6 +283,8 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete SKU: {}", e)))?;
 
+        self.evict_cached(&Self::product_detail_key(ProductId::new(sku.product_id)))
+            .await;
         Ok(())
     }
 
@@ -240,6 +309,8 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to adjust stock: {}", e)))?;
 
+        self.evict_cached(&Self::product_detail_key(ProductId::new(sku.product_id)))
+            .await;
         Ok(())
     }
 
@@ -274,6 +345,9 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to add image: {}", e)))?;
 
+        self.evict_cached(&Self::product_detail_key(product_id))
+            .await;
+
         // Fetch the newly created image for response
         let images = repository::list_images_by_product(&self.pool, product_id).await?;
         let image = images
@@ -305,6 +379,8 @@ impl CatalogService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete image: {}", e)))?;
 
+        self.evict_cached(&Self::product_detail_key(product_id))
+            .await;
         Ok(())
     }
 }
