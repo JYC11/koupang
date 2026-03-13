@@ -11,7 +11,7 @@ use crate::outbox::repository::{
     claim_batch, cleanup_published, delete_published, mark_published, mark_retry_or_failed,
     release_stale_locks,
 };
-use crate::outbox::types::{LogFailureEscalation, OutboxEvent};
+use crate::outbox::types::{LogFailureEscalation, OutboxEvent, RelayHeartbeat};
 
 /// Background relay that reads pending events from the outbox table and publishes them to Kafka.
 ///
@@ -24,6 +24,7 @@ pub struct OutboxRelay {
     pool: PgPool,
     publisher: Arc<dyn EventPublisher>,
     config: RelayConfig,
+    heartbeat: Arc<RelayHeartbeat>,
 }
 
 impl OutboxRelay {
@@ -32,7 +33,16 @@ impl OutboxRelay {
             pool,
             publisher,
             config,
+            heartbeat: Arc::new(RelayHeartbeat::new()),
         }
+    }
+
+    /// Returns a handle to the relay's heartbeat tracker.
+    ///
+    /// Call this before `run()` and pass the `Arc` to your health/metrics
+    /// endpoint. The relay updates the heartbeat on every loop iteration.
+    pub fn heartbeat(&self) -> Arc<RelayHeartbeat> {
+        Arc::clone(&self.heartbeat)
     }
 
     /// Start the relay. Consumes self and runs until the cancellation token is triggered.
@@ -106,6 +116,7 @@ impl OutboxRelay {
                 }
             }
 
+            relay.heartbeat.beat();
             relay.process_pending(&shutdown).await;
         }
     }
@@ -277,10 +288,23 @@ impl OutboxRelay {
                 _ = tokio::time::sleep(relay.config.cleanup_interval) => {}
             }
 
-            match cleanup_published(&relay.pool, max_age_secs).await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!(count = n, "Cleaned up old published outbox events"),
-                Err(e) => tracing::error!(error = %e, "Failed to cleanup published events"),
+            // Drain in batches of 1000 to avoid long transactions with 100K+ rows.
+            let mut total = 0u64;
+            loop {
+                if shutdown.is_cancelled() {
+                    break;
+                }
+                match cleanup_published(&relay.pool, max_age_secs).await {
+                    Ok(0) => break,
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to cleanup published events");
+                        break;
+                    }
+                }
+            }
+            if total > 0 {
+                tracing::info!(count = total, "Cleaned up old published outbox events");
             }
         }
     }

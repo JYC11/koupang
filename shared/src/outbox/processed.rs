@@ -41,16 +41,24 @@ pub async fn mark_event_processed(
     Ok(())
 }
 
-/// Delete processed-event records older than `max_age_secs` seconds.
+/// Delete up to 1000 processed-event records older than `max_age_secs` seconds.
 ///
-/// Returns the number of rows deleted. Intended to be called periodically
-/// by a background cleanup task so the table doesn't grow unbounded.
+/// Returns the number of rows deleted. Call in a loop until it returns 0
+/// to drain the full backlog in small batches (avoids long transactions
+/// and WAL pressure with 100K+ rows).
 pub async fn cleanup_processed_events(
     executor: impl sqlx::PgExecutor<'_>,
     max_age_secs: i64,
 ) -> Result<u64, AppError> {
     let result = sqlx::query(
-        "DELETE FROM processed_events WHERE processed_at < NOW() - make_interval(secs => $1::float8)",
+        r#"
+        DELETE FROM processed_events
+        WHERE event_id IN (
+            SELECT event_id FROM processed_events
+            WHERE processed_at < NOW() - make_interval(secs => $1::float8)
+            LIMIT 1000
+        )
+        "#,
     )
     .bind(max_age_secs)
     .execute(executor)

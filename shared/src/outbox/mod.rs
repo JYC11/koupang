@@ -17,6 +17,8 @@ pub use types::{
     OutboxInsert,
     OutboxMetrics,
     OutboxStatus,
+    // Relay heartbeat
+    RelayHeartbeat,
     // Trace context
     capture_trace_context,
 };

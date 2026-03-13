@@ -192,8 +192,11 @@ pub async fn release_stale_locks(
 
 // ── Cleanup published ───────────────────────────────────────────────
 
-/// Delete published events older than `max_age_secs`.
-/// Returns the number of rows deleted.
+/// Delete up to 1000 published events older than `max_age_secs`.
+///
+/// Returns the number of rows deleted. Call in a loop until it returns 0
+/// to drain the full backlog in small batches (avoids long transactions
+/// and WAL pressure with 100K+ rows).
 pub async fn cleanup_published(
     executor: impl sqlx::PgExecutor<'_>,
     max_age_secs: i64,
@@ -201,8 +204,12 @@ pub async fn cleanup_published(
     let result = sqlx::query(
         r#"
         DELETE FROM outbox_events
-        WHERE status = 'published'
-          AND published_at < NOW() - make_interval(secs => $1::float8)
+        WHERE id IN (
+            SELECT id FROM outbox_events
+            WHERE status = 'published'
+              AND published_at < NOW() - make_interval(secs => $1::float8)
+            LIMIT 1000
+        )
         "#,
     )
     .bind(max_age_secs)

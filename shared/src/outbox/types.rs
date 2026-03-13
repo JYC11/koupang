@@ -149,6 +149,62 @@ pub fn capture_trace_context() -> Option<serde_json::Value> {
     }))
 }
 
+// ── Relay heartbeat ──────────────────────────────────────────────────
+
+/// Thread-safe heartbeat tracker for the outbox relay.
+///
+/// The relay updates this on every loop iteration. Monitoring endpoints
+/// can read it to detect a stuck or crashed relay — unlike outbox table
+/// metrics, this goes stale when no relay is actually running.
+///
+/// Obtain via [`OutboxRelay::heartbeat()`] before calling `run()`.
+pub struct RelayHeartbeat {
+    /// Unix timestamp (seconds) of the last relay loop iteration.
+    last_beat_secs: std::sync::atomic::AtomicI64,
+}
+
+impl RelayHeartbeat {
+    pub(crate) fn new() -> Self {
+        Self {
+            last_beat_secs: std::sync::atomic::AtomicI64::new(0),
+        }
+    }
+
+    /// Record a heartbeat at the current time. Called by the relay loop.
+    pub(crate) fn beat(&self) {
+        let now = chrono::Utc::now().timestamp();
+        self.last_beat_secs
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Seconds since the last heartbeat, or `None` if the relay has never run.
+    pub fn seconds_since_last_beat(&self) -> Option<i64> {
+        let last = self
+            .last_beat_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if last == 0 {
+            return None;
+        }
+        Some(chrono::Utc::now().timestamp() - last)
+    }
+
+    /// Returns `true` if the relay has beaten within `max_age`.
+    pub fn is_alive(&self, max_age: std::time::Duration) -> bool {
+        match self.seconds_since_last_beat() {
+            Some(age) => age <= max_age.as_secs() as i64,
+            None => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for RelayHeartbeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayHeartbeat")
+            .field("seconds_since_last_beat", &self.seconds_since_last_beat())
+            .finish()
+    }
+}
+
 // ── Outbox metrics snapshot ──────────────────────────────────────────
 
 /// Point-in-time metrics for the outbox table.
@@ -282,5 +338,31 @@ mod tests {
         assert_eq!(metrics.failed_count, 0);
         assert_eq!(metrics.published_count, 0);
         assert!(metrics.oldest_pending_age_secs.is_none());
+    }
+
+    #[test]
+    fn relay_heartbeat_initially_not_alive() {
+        let hb = RelayHeartbeat::new();
+        assert!(hb.seconds_since_last_beat().is_none());
+        assert!(!hb.is_alive(std::time::Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn relay_heartbeat_after_beat() {
+        let hb = RelayHeartbeat::new();
+        hb.beat();
+
+        let age = hb.seconds_since_last_beat().expect("should have a beat");
+        assert!(
+            age >= 0 && age <= 1,
+            "just beat, age should be ~0s, got {age}"
+        );
+        assert!(hb.is_alive(std::time::Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn relay_heartbeat_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RelayHeartbeat>();
     }
 }
