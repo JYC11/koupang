@@ -49,6 +49,7 @@ where
         .with_tonic()
         .with_endpoint(&endpoint)
         .build()
+        // eprintln because tracing subscriber is not initialized yet at this point
         .map_err(|e| eprintln!("Failed to create OTLP span exporter: {e}"))
         .ok()?;
 

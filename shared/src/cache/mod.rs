@@ -51,20 +51,47 @@ impl RedisCache {
 
     pub async fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         let conn = self.conn.as_ref()?;
-        let data: String = conn.clone().get(key).await.ok()?;
-        serde_json::from_str(&data).ok()
+        let data: String = match conn.clone().get(key).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(key, error = %e, "cache GET failed");
+                return None;
+            }
+        };
+        match serde_json::from_str(&data) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(key, error = %e, "cache deserialization failed — possible schema drift");
+                None
+            }
+        }
     }
 
     pub async fn set<T: serde::Serialize>(&self, key: &str, value: &T) {
-        let Some(ref conn) = self.conn else { return };
-        let Ok(data) = serde_json::to_string(value) else {
-            return;
+        let conn = self.conn.as_ref();
+        let Some(conn) = conn else { return };
+        let data = match serde_json::to_string(value) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(key, error = %e, "cache serialization failed");
+                return;
+            }
         };
-        let _: Result<(), _> = conn.clone().set_ex(key, &data, self.default_ttl).await;
+        if let Err(e) = conn
+            .clone()
+            .set_ex::<_, _, ()>(key, &data, self.default_ttl)
+            .await
+        {
+            tracing::warn!(key, error = %e, "cache SET failed");
+        }
     }
 
     pub async fn evict(&self, key: &str) {
-        let Some(ref conn) = self.conn else { return };
-        let _: Result<(), _> = conn.clone().del(key).await;
+        let Some(conn) = self.conn.as_ref() else {
+            return;
+        };
+        if let Err(e) = conn.clone().del::<_, ()>(key).await {
+            tracing::warn!(key, error = %e, "cache DEL failed");
+        }
     }
 }

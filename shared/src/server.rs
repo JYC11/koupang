@@ -22,7 +22,7 @@ pub struct Infra {
 }
 
 // ---------------------------------------------------------------------------
-// GrpcConfig (shared between old and new API)
+// GrpcConfig
 // ---------------------------------------------------------------------------
 
 pub struct GrpcConfig {
@@ -96,8 +96,8 @@ impl ServiceBuilder {
     where
         F: FnOnce(&Infra) -> Router,
     {
-        let infra = self.init_infra().await;
         let port = self.parse_http_port();
+        let infra = self.init_infra().await;
         let app = build_app(&infra).merge(health_routes(self.name));
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
@@ -121,15 +121,15 @@ impl ServiceBuilder {
         G: FnOnce(Infra, SocketAddr) -> Fut,
         Fut: Future<Output = Result<(), tonic::transport::Error>> + Send,
     {
-        let infra = self.init_infra().await;
         let port = self.parse_http_port();
-        let app = build_app(&infra).merge(health_routes(self.name));
-
         let grpc_port: u16 = std::env::var(grpc_config.port_env_key)
             .unwrap_or_else(|_| grpc_config.default_port.to_string())
             .parse()
             .expect("gRPC port must be a valid u16");
         let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
+
+        let infra = self.init_infra().await;
+        let app = build_app(&infra).merge(health_routes(self.name));
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{} HTTP listening on port {port}", self.name);
@@ -159,5 +159,62 @@ impl ServiceBuilder {
             .unwrap_or_else(|_| "3000".to_string())
             .parse()
             .expect("HTTP port must be a valid u16")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_defaults() {
+        let builder = ServiceBuilder::new("test-svc");
+        assert_eq!(builder.name, "test-svc");
+        assert_eq!(builder.http_port_env, "PORT");
+        assert_eq!(builder.db_url_env, "DATABASE_URL");
+        assert_eq!(builder.migrations_dir, "./migrations");
+        assert!(!builder.redis);
+    }
+
+    #[test]
+    fn builder_methods_override_defaults() {
+        let builder = ServiceBuilder::new("svc")
+            .http_port_env("MY_PORT")
+            .db_url_env("MY_DB")
+            .migrations_dir("./db/migrations")
+            .with_redis();
+        assert_eq!(builder.http_port_env, "MY_PORT");
+        assert_eq!(builder.db_url_env, "MY_DB");
+        assert_eq!(builder.migrations_dir, "./db/migrations");
+        assert!(builder.redis);
+    }
+
+    #[test]
+    fn parse_http_port_uses_env_var() {
+        let key = "TEST_SB_PORT_1";
+        // SAFETY: test-only, single-threaded unit tests
+        unsafe { std::env::set_var(key, "8080") };
+        let builder = ServiceBuilder::new("svc").http_port_env(key);
+        assert_eq!(builder.parse_http_port(), 8080);
+        unsafe { std::env::remove_var(key) };
+    }
+
+    #[test]
+    fn parse_http_port_defaults_to_3000() {
+        let key = "TEST_SB_PORT_UNSET";
+        // SAFETY: test-only, single-threaded unit tests
+        unsafe { std::env::remove_var(key) };
+        let builder = ServiceBuilder::new("svc").http_port_env(key);
+        assert_eq!(builder.parse_http_port(), 3000);
+    }
+
+    #[test]
+    #[should_panic(expected = "HTTP port must be a valid u16")]
+    fn parse_http_port_panics_on_invalid_value() {
+        let key = "TEST_SB_PORT_BAD";
+        // SAFETY: test-only, single-threaded unit tests
+        unsafe { std::env::set_var(key, "not-a-number") };
+        let builder = ServiceBuilder::new("svc").http_port_env(key);
+        builder.parse_http_port();
     }
 }
