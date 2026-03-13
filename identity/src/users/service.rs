@@ -16,9 +16,9 @@ use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::{Duration, Utc};
-use redis::AsyncCommands;
 use shared::auth::jwt::{CurrentUser, JwtService, JwtTokens};
 use shared::auth::middleware::GetCurrentUser;
+use shared::cache::RedisCache;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
 use shared::db::transaction_support::{TxError, with_transaction};
@@ -34,7 +34,7 @@ pub struct UserService {
     pool: PgPool,
     pub jwt_service: JwtService,
     email_service: Arc<dyn EmailService>,
-    redis_conn: Option<redis::aio::ConnectionManager>,
+    cache: RedisCache,
 }
 
 impl UserService {
@@ -47,7 +47,7 @@ impl UserService {
             pool: pool.clone(),
             jwt_service: JwtService::new(AuthConfig::new()),
             email_service,
-            redis_conn,
+            cache: RedisCache::new(redis_conn, USER_CACHE_TTL_SECS),
         }
     }
 
@@ -61,8 +61,12 @@ impl UserService {
             pool: pool.clone(),
             jwt_service: JwtService::new(auth_config),
             email_service,
-            redis_conn,
+            cache: RedisCache::new(redis_conn, USER_CACHE_TTL_SECS),
         }
+    }
+
+    fn user_cache_key(id: UserId) -> String {
+        format!("{USER_CACHE_PREFIX}{id}")
     }
 
     pub async fn create_user(&self, req: UserCreateReq) -> Result<(), AppError> {
@@ -148,7 +152,7 @@ impl UserService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update user: {}", e)))?;
 
-        self.evict_user_cache(id).await;
+        self.cache.evict(&Self::user_cache_key(id)).await;
 
         Ok(())
     }
@@ -165,7 +169,7 @@ impl UserService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to delete user: {}", e)))?;
 
-        self.evict_user_cache(id).await;
+        self.cache.evict(&Self::user_cache_key(id)).await;
 
         Ok(())
     }
@@ -322,56 +326,28 @@ impl UserService {
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to change password: {}", e)))?;
 
-        self.evict_user_cache(user_id).await;
+        self.cache.evict(&Self::user_cache_key(user_id)).await;
 
         Ok(())
-    }
-
-    async fn get_cached_user(&self, id: UserId) -> Option<CurrentUser> {
-        let mut conn = self.redis_conn.as_ref()?.clone();
-        let key = format!("{}{}", USER_CACHE_PREFIX, id);
-        let value: Option<String> = conn.get(&key).await.ok()?;
-        value.and_then(|v| serde_json::from_str(&v).ok())
-    }
-
-    async fn cache_user(&self, user: &CurrentUser) {
-        if let Some(conn) = &self.redis_conn {
-            let key = format!("{}{}", USER_CACHE_PREFIX, UserId::new(user.id));
-            if let Ok(value) = serde_json::to_string(user) {
-                let mut conn = conn.clone();
-                let _: Result<(), redis::RedisError> =
-                    conn.set_ex(&key, &value, USER_CACHE_TTL_SECS).await;
-            }
-        }
-    }
-
-    async fn evict_user_cache(&self, id: UserId) {
-        if let Some(conn) = &self.redis_conn {
-            let key = format!("{}{}", USER_CACHE_PREFIX, id);
-            let mut conn = conn.clone();
-            let _: Result<(), redis::RedisError> = conn.del(&key).await;
-        }
     }
 }
 
 #[async_trait::async_trait]
 impl GetCurrentUser for UserService {
     async fn get_by_id(&self, id: Uuid) -> Result<CurrentUser, AppError> {
-        // Check cache first
         let user_id = UserId::new(id);
-        if let Some(cached) = self.get_cached_user(user_id).await {
+        let cache_key = UserService::user_cache_key(user_id);
+
+        if let Some(cached) = self.cache.get::<CurrentUser>(&cache_key).await {
             return Ok(cached);
         }
 
         let user = get_user_by_id(&self.pool, user_id).await?;
-
         let current_user = CurrentUser {
             id: user.id,
             role: user.role,
         };
-
-        // Cache the result
-        self.cache_user(&current_user).await;
+        self.cache.set(&cache_key, &current_user).await;
 
         Ok(current_user)
     }

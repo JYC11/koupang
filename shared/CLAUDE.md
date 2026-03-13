@@ -47,7 +47,7 @@ shared/src/
 │   ├── processed.rs           # is_event_processed, mark_event_processed, cleanup_processed_events
 │   ├── relay.rs               # OutboxRelay — background task: claim → publish → ack
 │   └── metrics.rs             # collect_outbox_metrics → OutboxMetrics
-├── cache/mod.rs               # init_redis(), init_optional_redis()
+├── cache/mod.rs               # init_redis(), init_optional_redis(), RedisCache (generic JSON cache)
 ├── email/mod.rs               # EmailService trait, EmailMessage, MockEmailService
 ├── grpc/mod.rs                # grpc::identity (generated protobuf)
 └── test_utils/                # behind `test-utils` feature
