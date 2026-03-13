@@ -8,7 +8,7 @@ Reusable libraries and infrastructure code shared across all microservices.
 shared/src/
 ├── lib.rs                     # re-exports all modules
 ├── server.rs                  # ServiceBuilder, Infra, GrpcConfig — composable service bootstrap
-├── observability.rs           # init_tracing()
+├── observability.rs           # init_tracing() — console + optional OTLP exporter (feature: `telemetry`)
 ├── health.rs                  # health_routes() → GET /health
 ├── errors.rs                  # AppError enum → IntoResponse
 ├── responses.rs               # ok(), success(), created()
