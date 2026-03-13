@@ -37,6 +37,7 @@ shared/src/
 │   ├── producer.rs            # KafkaEventPublisher — impl EventPublisher via rdkafka
 │   ├── consumer.rs            # KafkaEventConsumer, EventHandler, HandlerError, ConsumerConfig — consumer with DLQ
 │   ├── health.rs              # KafkaHealthChecker, KafkaHealth, KafkaHealthStatus — broker connectivity check
+│   ├── metrics.rs             # ConsumerMetricsCollector, ConsumerMetrics — in-memory consumer counters
 │   ├── mock.rs                # MockEventPublisher (captures events in Arc<Mutex<Vec>>)
 │   └── mock_handler.rs        # MockEventHandler (test-utils) — queued results + received tracking
 ├── outbox/
@@ -74,7 +75,7 @@ shared/src/
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
-| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus` |
+| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
@@ -238,10 +239,12 @@ impl EventHandler for MyHandler {
     }
 }
 
-// 2. Configure and run
+// 2. Configure, grab metrics handle, and run
 let config = ConsumerConfig::new("order-consumer", vec!["order.events".into()]);
 let consumer = KafkaEventConsumer::new(&kafka_config, config, Arc::new(MyHandler), pool)?;
+let metrics = consumer.metrics(); // Arc<ConsumerMetricsCollector> — pass to health endpoint
 consumer.run(shutdown_token).await;
+// metrics.snapshot() → ConsumerMetrics { events_processed, events_retried, ... }
 ```
 
 ### Processing guarantees

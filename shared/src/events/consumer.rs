@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
@@ -11,6 +11,7 @@ use crate::config::consumer_config::ConsumerConfig;
 use crate::config::kafka_config::KafkaConfig;
 use crate::db::PgPool;
 use crate::errors::AppError;
+use crate::events::metrics::ConsumerMetricsCollector;
 use crate::events::{EventEnvelope, KafkaAdmin, TopicSpec};
 use crate::outbox::{cleanup_processed_events, is_event_processed, mark_event_processed};
 
@@ -94,6 +95,7 @@ pub struct KafkaEventConsumer {
     producer: FutureProducer,
     config: ConsumerConfig,
     kafka_config: KafkaConfig,
+    metrics: Arc<ConsumerMetricsCollector>,
 }
 
 impl KafkaEventConsumer {
@@ -128,7 +130,15 @@ impl KafkaEventConsumer {
             producer,
             config,
             kafka_config: KafkaConfig::from_brokers(&kafka_config.brokers),
+            metrics: Arc::new(ConsumerMetricsCollector::new()),
         })
+    }
+
+    /// Returns a handle to the consumer's metrics collector.
+    ///
+    /// Call this before [`run`](Self::run) to keep a reference for monitoring endpoints.
+    pub fn metrics(&self) -> Arc<ConsumerMetricsCollector> {
+        Arc::clone(&self.metrics)
     }
 
     /// Start consuming. Runs until the cancellation token is triggered.
@@ -205,6 +215,7 @@ impl KafkaEventConsumer {
     // ── Per-message processing ──────────────────────────────────────
 
     async fn process_message(&self, msg: &BorrowedMessage<'_>, shutdown: &CancellationToken) {
+        let started_at = Instant::now();
         let topic = msg.topic().to_string();
         let raw_payload = msg.payload().unwrap_or_default();
 
@@ -221,8 +232,12 @@ impl KafkaEventConsumer {
                     .publish_raw_to_dlq(&topic, raw_payload, &e.to_string())
                     .await
                 {
-                    Ok(()) => self.commit_offset(msg),
+                    Ok(()) => {
+                        self.metrics.record_deser_failed(started_at);
+                        self.commit_offset(msg);
+                    }
                     Err(dlq_err) => {
+                        self.metrics.record_dlq_failed(started_at);
                         tracing::error!(
                             error = %dlq_err,
                             "DLQ publish failed for deser failure, not committing offset"
@@ -234,7 +249,10 @@ impl KafkaEventConsumer {
         };
 
         // Step 2: Process with retry
-        match self.process_with_retry(&envelope, &topic, shutdown).await {
+        match self
+            .process_with_retry(&envelope, &topic, shutdown, started_at)
+            .await
+        {
             ProcessResult::Success | ProcessResult::Skipped | ProcessResult::SentToDlq => {
                 self.commit_offset(msg);
             }
@@ -250,6 +268,7 @@ impl KafkaEventConsumer {
         envelope: &EventEnvelope,
         topic: &str,
         shutdown: &CancellationToken,
+        started_at: Instant,
     ) -> ProcessResult {
         let event_id = envelope.metadata.event_id;
         let event_type = envelope.metadata.event_type.to_string();
@@ -262,6 +281,7 @@ impl KafkaEventConsumer {
                 Ok(tx) => tx,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to begin transaction");
+                    self.metrics.record_db_error(started_at);
                     return ProcessResult::DbError;
                 }
             };
@@ -271,14 +291,17 @@ impl KafkaEventConsumer {
                 Ok(true) => {
                     if let Err(e) = tx.commit().await {
                         tracing::error!(error = %e, "Failed to commit skip-transaction");
+                        self.metrics.record_db_error(started_at);
                         return ProcessResult::DbError;
                     }
                     tracing::debug!(event_id = %event_id, "Event already processed, skipping");
+                    self.metrics.record_skipped(started_at);
                     return ProcessResult::Skipped;
                 }
                 Ok(false) => {}
                 Err(e) => {
                     tracing::error!(error = %e, "Idempotency check failed");
+                    self.metrics.record_db_error(started_at);
                     return ProcessResult::DbError;
                 }
             }
@@ -291,10 +314,12 @@ impl KafkaEventConsumer {
                         mark_event_processed(&mut *tx, event_id, &event_type, &source_service).await
                     {
                         tracing::error!(error = %e, "Failed to mark event processed");
+                        self.metrics.record_db_error(started_at);
                         return ProcessResult::DbError;
                     }
                     if let Err(e) = tx.commit().await {
                         tracing::error!(error = %e, "Failed to commit transaction");
+                        self.metrics.record_db_error(started_at);
                         return ProcessResult::DbError;
                     }
                     tracing::debug!(
@@ -302,6 +327,7 @@ impl KafkaEventConsumer {
                         event_type = %event_type,
                         "Event processed successfully"
                     );
+                    self.metrics.record_success(started_at);
                     return ProcessResult::Success;
                 }
                 Err(HandlerError::Permanent(e)) => {
@@ -312,9 +338,14 @@ impl KafkaEventConsumer {
                         error = %last_error,
                         "Permanent handler error, sending to DLQ"
                     );
-                    return self
+                    let result = self
                         .publish_envelope_to_dlq(topic, envelope, &last_error, 0)
                         .await;
+                    match result {
+                        ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
+                        _ => self.metrics.record_dlq_failed(started_at),
+                    }
+                    return result;
                 }
                 Err(HandlerError::Transient(e)) => {
                     last_error = e.to_string();
@@ -324,6 +355,7 @@ impl KafkaEventConsumer {
                         break; // Exhausted retries → DLQ below
                     }
 
+                    self.metrics.record_retry();
                     tracing::warn!(
                         event_id = %event_id,
                         error = %last_error,
@@ -338,7 +370,7 @@ impl KafkaEventConsumer {
                         biased;
                         _ = shutdown.cancelled() => {
                             tracing::info!("Shutdown during retry backoff, sending to DLQ");
-                            return self
+                            let result = self
                                 .publish_envelope_to_dlq(
                                     topic,
                                     envelope,
@@ -346,6 +378,11 @@ impl KafkaEventConsumer {
                                     attempt + 1,
                                 )
                                 .await;
+                            match result {
+                                ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
+                                _ => self.metrics.record_dlq_failed(started_at),
+                            }
+                            return result;
                         }
                         _ = tokio::time::sleep(delay) => {}
                     }
@@ -360,8 +397,14 @@ impl KafkaEventConsumer {
             error = %last_error,
             "Handler exhausted retries, sending to DLQ"
         );
-        self.publish_envelope_to_dlq(topic, envelope, &last_error, self.config.max_retries)
-            .await
+        let result = self
+            .publish_envelope_to_dlq(topic, envelope, &last_error, self.config.max_retries)
+            .await;
+        match result {
+            ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
+            _ => self.metrics.record_dlq_failed(started_at),
+        }
+        result
     }
 
     // ── DLQ publishing ──────────────────────────────────────────────
