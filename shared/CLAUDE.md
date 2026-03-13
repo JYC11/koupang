@@ -76,7 +76,7 @@ shared/src/
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
-| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` |
+| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay`, `RelayHeartbeat` |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
 
@@ -138,8 +138,13 @@ let publisher = Arc::new(KafkaEventPublisher::new(&kafka_config)?);
 let config = RelayConfig::default(); // or customize batch_size, poll_interval, etc.
 let relay = OutboxRelay::new(pool, publisher, config);
 
+let heartbeat = relay.heartbeat(); // Arc<RelayHeartbeat> — pass to health endpoint
 let shutdown = CancellationToken::new();
 relay.run(shutdown.clone()).await; // runs until shutdown.cancel()
+
+// From health endpoint:
+// heartbeat.is_alive(Duration::from_secs(120))
+// heartbeat.seconds_since_last_beat() → Option<i64>
 ```
 
 Runs 3 concurrent loops: relay (claim→publish→ack), stale lock recovery, cleanup.
