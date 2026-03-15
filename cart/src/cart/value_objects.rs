@@ -87,4 +87,22 @@ mod tests {
         let long = "a".repeat(501);
         assert!(CartProductName::new(&long).is_err());
     }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            // Quantity accepts 1..=99, rejects everything else.
+            #[test]
+            fn quantity_accepts_valid(v in 1u32..=99) {
+                prop_assert!(Quantity::new(v).is_ok());
+            }
+
+            #[test]
+            fn quantity_rejects_zero_and_over(v in prop_oneof![Just(0u32), 100u32..=10000]) {
+                prop_assert!(Quantity::new(v).is_err());
+            }
+        }
+    }
 }

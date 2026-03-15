@@ -55,6 +55,7 @@ pub fn cancellation_rules() -> Rule<OrderCheck> {
 
 // ── Contexts ─────────────────────────────────────────────
 
+#[derive(Debug)]
 pub struct CreateOrderContext {
     pub item_count: usize,
     pub total_amount: Decimal,
@@ -63,6 +64,7 @@ pub struct CreateOrderContext {
     pub all_prices_positive: bool,
 }
 
+#[derive(Debug)]
 pub struct CancellationContext {
     pub current_status: OrderStatus,
 }
@@ -223,5 +225,93 @@ mod tests {
         let desc = rules.describe();
         assert!(desc.contains("order must have at least one item"));
         assert!(desc.contains("AND"));
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_creation_ctx() -> impl Strategy<Value = CreateOrderContext> {
+            (
+                0usize..200,
+                (0i64..10_000_000).prop_map(|c| Decimal::new(c, 2)),
+                prop_oneof![
+                    Just("USD".to_string()),
+                    Just("KRW".to_string()),
+                    Just("EUR".to_string()),
+                    Just("XYZ".to_string()),
+                    Just("".to_string()),
+                ],
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(item_count, total_amount, currency, shipping, prices)| {
+                    CreateOrderContext {
+                        item_count,
+                        total_amount,
+                        currency,
+                        shipping_complete: shipping,
+                        all_prices_positive: prices,
+                    }
+                })
+        }
+
+        fn arb_order_status() -> impl Strategy<Value = OrderStatus> {
+            prop_oneof![
+                Just(OrderStatus::Pending),
+                Just(OrderStatus::InventoryReserved),
+                Just(OrderStatus::PaymentAuthorized),
+                Just(OrderStatus::Confirmed),
+                Just(OrderStatus::Shipped),
+                Just(OrderStatus::Delivered),
+                Just(OrderStatus::Cancelled),
+                Just(OrderStatus::Returned),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            // evaluate and evaluate_detailed agree for creation rules.
+            #[test]
+            fn creation_eval_agrees_with_detailed(ctx in arb_creation_ctx()) {
+                let rules = creation_rules();
+                let pred = eval_creation(&ctx);
+                prop_assert_eq!(rules.evaluate(&pred), rules.evaluate_detailed(&pred).passed());
+            }
+
+            // evaluate and evaluate_detailed agree for cancellation rules.
+            #[test]
+            fn cancellation_eval_agrees_with_detailed(status in arb_order_status()) {
+                let ctx = CancellationContext { current_status: status };
+                let rules = cancellation_rules();
+                let pred = eval_cancellation(&ctx);
+                prop_assert_eq!(rules.evaluate(&pred), rules.evaluate_detailed(&pred).passed());
+            }
+
+            // Terminal states never allow cancellation.
+            #[test]
+            fn terminal_states_reject_cancellation(status in prop_oneof![
+                Just(OrderStatus::Cancelled),
+                Just(OrderStatus::Returned),
+                Just(OrderStatus::Delivered),
+            ]) {
+                let ctx = CancellationContext { current_status: status };
+                prop_assert!(!cancellation_rules().evaluate(&eval_cancellation(&ctx)));
+            }
+
+            // Non-terminal states (except Delivered) allow cancellation.
+            #[test]
+            fn non_terminal_states_allow_cancellation(status in prop_oneof![
+                Just(OrderStatus::Pending),
+                Just(OrderStatus::InventoryReserved),
+                Just(OrderStatus::PaymentAuthorized),
+                Just(OrderStatus::Confirmed),
+                Just(OrderStatus::Shipped),
+            ]) {
+                let ctx = CancellationContext { current_status: status };
+                prop_assert!(cancellation_rules().evaluate(&eval_cancellation(&ctx)));
+            }
+        }
     }
 }

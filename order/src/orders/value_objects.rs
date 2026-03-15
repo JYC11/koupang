@@ -413,6 +413,66 @@ mod tests {
         assert!(ShippingAddress::new(req).is_err());
     }
 
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // Quantity accepts 1..=9999 and rejects everything else.
+        proptest! {
+            #[test]
+            fn quantity_accepts_valid_range(v in 1..=9999i32) {
+                prop_assert!(Quantity::new(v).is_ok());
+            }
+
+            #[test]
+            fn quantity_rejects_non_positive(v in -1000..=0i32) {
+                prop_assert!(Quantity::new(v).is_err());
+            }
+
+            #[test]
+            fn quantity_rejects_over_max(v in 10000..=100000i32) {
+                prop_assert!(Quantity::new(v).is_err());
+            }
+
+            // OrderStatus: terminal states have no valid transitions.
+            #[test]
+            fn terminal_states_reject_all_transitions(
+                target in prop_oneof![
+                    Just(OrderStatus::Pending),
+                    Just(OrderStatus::InventoryReserved),
+                    Just(OrderStatus::PaymentAuthorized),
+                    Just(OrderStatus::Confirmed),
+                    Just(OrderStatus::Shipped),
+                    Just(OrderStatus::Delivered),
+                    Just(OrderStatus::Cancelled),
+                    Just(OrderStatus::Returned),
+                ]
+            ) {
+                prop_assert!(OrderStatus::Cancelled.transition_to(&target).is_err());
+                prop_assert!(OrderStatus::Returned.transition_to(&target).is_err());
+            }
+
+            // transition_to is consistent with can_cancel.
+            #[test]
+            fn transition_to_cancel_consistent_with_can_cancel(
+                status in prop_oneof![
+                    Just(OrderStatus::Pending),
+                    Just(OrderStatus::InventoryReserved),
+                    Just(OrderStatus::PaymentAuthorized),
+                    Just(OrderStatus::Confirmed),
+                    Just(OrderStatus::Shipped),
+                    Just(OrderStatus::Delivered),
+                    Just(OrderStatus::Cancelled),
+                    Just(OrderStatus::Returned),
+                ]
+            ) {
+                let can = status.can_cancel();
+                let transition = status.transition_to(&OrderStatus::Cancelled);
+                prop_assert_eq!(can, transition.is_ok());
+            }
+        }
+    }
+
     // ── OrderStatus serialization ─────────────────────────
 
     #[test]

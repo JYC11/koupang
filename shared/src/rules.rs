@@ -147,19 +147,50 @@ impl<A> RuleResult<A> {
 }
 
 impl<A: Clone> RuleResult<A> {
-    /// Collect all failed leaf checks from the result tree.
+    /// Collect passing leaf checks from the result tree.
+    fn collect_passes(&self) -> Vec<A> {
+        match self {
+            Self::Pass { check } => vec![check.clone()],
+            Self::Fail { .. } => vec![],
+            Self::AllOf { results, passed } | Self::AnyOf { results, passed } => {
+                if *passed {
+                    results.iter().flat_map(|r| r.collect_passes()).collect()
+                } else {
+                    vec![]
+                }
+            }
+            Self::Negated { passed, .. } => {
+                if *passed {
+                    // Negated passed = inner failed. No passing leaves here.
+                    vec![]
+                } else {
+                    vec![]
+                }
+            }
+        }
+    }
+
+    /// Collect contributing failed leaf checks from the result tree.
+    /// Only descends into nodes that themselves failed — a passing `AnyOf`
+    /// does not surface its non-contributing child failures.
     pub fn collect_failures(&self) -> Vec<A> {
         match self {
             Self::Pass { .. } => vec![],
             Self::Fail { check } => vec![check.clone()],
-            Self::AllOf { results, .. } | Self::AnyOf { results, .. } => {
-                results.iter().flat_map(|r| r.collect_failures()).collect()
+            Self::AllOf { results, passed } | Self::AnyOf { results, passed } => {
+                if *passed {
+                    vec![]
+                } else {
+                    results.iter().flat_map(|r| r.collect_failures()).collect()
+                }
             }
             Self::Negated { inner, passed } => {
                 if *passed {
                     vec![]
                 } else {
-                    inner.collect_failures()
+                    // Negated node failed = inner passed. Report the inner's passing
+                    // checks as the "failures" — they are what the Not disagrees with.
+                    inner.collect_passes()
                 }
             }
         }
@@ -442,5 +473,167 @@ mod tests {
         let result = rule.evaluate_detailed(&eval_check);
         let msgs = result.failure_messages();
         assert_eq!(msgs, vec!["is admin"]);
+    }
+
+    // ── Property-based tests (proptest) ──────────────────
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // Strategy for leaf Check values.
+        fn arb_check() -> impl Strategy<Value = Check> {
+            prop_oneof![
+                Just(Check::IsAdmin),
+                Just(Check::HasEmail),
+                (0u32..200).prop_map(Check::MinAge),
+            ]
+        }
+
+        // Strategy for Rule<Check> trees with bounded depth.
+        fn arb_rule() -> impl Strategy<Value = Rule<Check>> {
+            let leaf = arb_check().prop_map(Rule::Check);
+            leaf.prop_recursive(4, 64, 8, |inner| {
+                prop_oneof![
+                    3 => arb_check().prop_map(Rule::Check),
+                    1 => inner.clone().prop_map(|r| Rule::Not(Box::new(r))),
+                    1 => prop::collection::vec(inner.clone(), 0..6).prop_map(Rule::All),
+                    1 => prop::collection::vec(inner, 0..6).prop_map(Rule::Any),
+                ]
+            })
+        }
+
+        // Three predicates: always-true, always-false, domain-specific.
+        fn arb_predicate_index() -> impl Strategy<Value = u8> {
+            0u8..3
+        }
+
+        fn pick_predicate(idx: u8) -> impl Fn(&Check) -> bool {
+            move |check| match idx {
+                0 => true,
+                1 => false,
+                _ => eval_check(check),
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            // LAW 1: evaluate and evaluate_detailed agree on pass/fail.
+            #[test]
+            fn evaluate_agrees_with_detailed(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let bool_result = rule.evaluate(&pred);
+                let detailed_result = rule.evaluate_detailed(&pred);
+                prop_assert_eq!(bool_result, detailed_result.passed());
+            }
+
+            // LAW 2: All is order-independent.
+            #[test]
+            fn all_is_order_independent(children in prop::collection::vec(arb_rule(), 0..8), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let original = Rule::All(children.clone());
+                let mut reversed = children;
+                reversed.reverse();
+                let flipped = Rule::All(reversed);
+                prop_assert_eq!(original.evaluate(&pred), flipped.evaluate(&pred));
+            }
+
+            // LAW 3: Any is order-independent.
+            #[test]
+            fn any_is_order_independent(children in prop::collection::vec(arb_rule(), 0..8), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let original = Rule::Any(children.clone());
+                let mut reversed = children;
+                reversed.reverse();
+                let flipped = Rule::Any(reversed);
+                prop_assert_eq!(original.evaluate(&pred), flipped.evaluate(&pred));
+            }
+
+            // LAW 4: Double negation is identity.
+            #[test]
+            fn double_negation(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let double_neg = Rule::not(Rule::not(rule.clone()));
+                prop_assert_eq!(rule.evaluate(&pred), double_neg.evaluate(&pred));
+            }
+
+            // LAW 5: Not inverts the result.
+            #[test]
+            fn not_inverts_result(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let negated = Rule::not(rule.clone());
+                prop_assert_ne!(rule.evaluate(&pred), negated.evaluate(&pred));
+            }
+
+            // LAW 6a: passed → no failures.
+            #[test]
+            fn passed_implies_no_failures(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let result = rule.evaluate_detailed(&pred);
+                if result.passed() {
+                    prop_assert!(
+                        result.collect_failures().is_empty(),
+                        "passed but failures={:?}",
+                        result.collect_failures()
+                    );
+                }
+            }
+
+            // LAW 6b: has failures → not passed.
+            #[test]
+            fn failures_implies_not_passed(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let result = rule.evaluate_detailed(&pred);
+                if !result.collect_failures().is_empty() {
+                    prop_assert!(
+                        !result.passed(),
+                        "has failures but passed"
+                    );
+                }
+            }
+
+            // LAW 7: describe never panics and is non-empty.
+            #[test]
+            fn describe_never_panics(rule in arb_rule()) {
+                let desc = rule.describe();
+                prop_assert!(!desc.is_empty());
+            }
+
+            // LAW 8: collect_checks count is stable.
+            #[test]
+            fn collect_checks_count_stable(rule in arb_rule()) {
+                let first = rule.collect_checks().len();
+                let second = rule.collect_checks().len();
+                prop_assert_eq!(first, second);
+            }
+
+            // LAW 9: failure_messages matches collect_failures count.
+            #[test]
+            fn failure_messages_matches_failures(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let result = rule.evaluate_detailed(&pred);
+                prop_assert_eq!(
+                    result.collect_failures().len(),
+                    result.failure_messages().len()
+                );
+            }
+
+            // LAW 10: All(single child) == child.
+            #[test]
+            fn all_single_child_is_identity(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let wrapped = Rule::All(vec![rule.clone()]);
+                prop_assert_eq!(rule.evaluate(&pred), wrapped.evaluate(&pred));
+            }
+
+            // LAW 11: Any(single child) == child.
+            #[test]
+            fn any_single_child_is_identity(rule in arb_rule(), pred_idx in arb_predicate_index()) {
+                let pred = pick_predicate(pred_idx);
+                let wrapped = Rule::Any(vec![rule.clone()]);
+                prop_assert_eq!(rule.evaluate(&pred), wrapped.evaluate(&pred));
+            }
+        }
     }
 }

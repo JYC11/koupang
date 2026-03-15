@@ -56,12 +56,14 @@ pub fn capture_rules() -> Rule<PaymentCheck> {
 
 // ── Contexts ─────────────────────────────────────────────
 
+#[derive(Debug)]
 pub struct AuthorizationContext {
     pub amount: Decimal,
     pub currency: String,
     pub payment_state: PaymentState,
 }
 
+#[derive(Debug)]
 pub struct CaptureContext {
     pub payment_state: PaymentState,
     pub auth_amount: Decimal,
@@ -220,5 +222,94 @@ mod tests {
         let desc = rules.describe();
         assert!(desc.contains("amount must be at least"));
         assert!(desc.contains("AND"));
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_payment_state() -> impl Strategy<Value = PaymentState> {
+            prop_oneof![
+                Just(PaymentState::New),
+                Just(PaymentState::Authorized),
+                Just(PaymentState::Captured),
+                Just(PaymentState::Voided),
+                Just(PaymentState::Refunded),
+                Just(PaymentState::Pending),
+                Just(PaymentState::Failed),
+            ]
+        }
+
+        fn arb_auth_ctx() -> impl Strategy<Value = AuthorizationContext> {
+            (
+                (0i64..20_000_000).prop_map(|c| Decimal::new(c, 2)),
+                prop_oneof![
+                    Just("USD".to_string()),
+                    Just("KRW".to_string()),
+                    Just("XYZ".to_string()),
+                ],
+                arb_payment_state(),
+            )
+                .prop_map(|(amount, currency, state)| AuthorizationContext {
+                    amount,
+                    currency,
+                    payment_state: state,
+                })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            // evaluate and evaluate_detailed agree for authorization rules.
+            #[test]
+            fn auth_eval_agrees_with_detailed(ctx in arb_auth_ctx()) {
+                let rules = authorization_rules();
+                let pred = eval_authorization(&ctx);
+                prop_assert_eq!(rules.evaluate(&pred), rules.evaluate_detailed(&pred).passed());
+            }
+
+            // Only New and Failed allow authorization.
+            #[test]
+            fn auth_only_from_new_or_failed(state in arb_payment_state()) {
+                let ctx = AuthorizationContext {
+                    amount: Decimal::new(5000, 2),
+                    currency: "USD".to_string(),
+                    payment_state: state,
+                };
+                let pred = eval_authorization(&ctx);
+                let valid_state = matches!(state, PaymentState::New | PaymentState::Failed);
+                // If state is invalid, the ValidStateForOperation check must fail.
+                let result = authorization_rules().evaluate_detailed(&pred);
+                if !valid_state {
+                    prop_assert!(!result.passed());
+                }
+            }
+
+            // Capture amount must match auth amount.
+            #[test]
+            fn capture_detects_amount_mismatch(
+                auth in (1i64..100_000).prop_map(|c| Decimal::new(c, 2)),
+                delta in (1i64..1000).prop_map(|c| Decimal::new(c, 2)),
+            ) {
+                let ctx = CaptureContext {
+                    payment_state: PaymentState::Authorized,
+                    auth_amount: auth,
+                    capture_amount: auth + delta,
+                };
+                let result = capture_rules().evaluate_detailed(&eval_capture(&ctx));
+                prop_assert!(!result.passed());
+            }
+
+            // Capture with matching amount and Authorized state always passes.
+            #[test]
+            fn capture_passes_when_valid(amount in (1i64..100_000).prop_map(|c| Decimal::new(c, 2))) {
+                let ctx = CaptureContext {
+                    payment_state: PaymentState::Authorized,
+                    auth_amount: amount,
+                    capture_amount: amount,
+                };
+                prop_assert!(capture_rules().evaluate(&eval_capture(&ctx)));
+            }
+        }
     }
 }

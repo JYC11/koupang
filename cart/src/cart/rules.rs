@@ -50,6 +50,7 @@ pub fn checkout_readiness_rules() -> Rule<CheckoutCheck> {
 
 // ── Context ──────────────────────────────────────────────
 
+#[derive(Debug)]
 pub struct CheckoutContext {
     pub item_count: usize,
     pub cart_total: Decimal,
@@ -185,5 +186,78 @@ mod tests {
         let desc = rules.describe();
         assert!(desc.contains("cart must not be empty"));
         assert!(desc.contains("AND"));
+    }
+
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_checkout_ctx() -> impl Strategy<Value = CheckoutContext> {
+            (
+                0usize..100,
+                (0i64..10_000_000).prop_map(|c| Decimal::new(c, 2)),
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(items, total, prices, quantities)| CheckoutContext {
+                    item_count: items,
+                    cart_total: total,
+                    all_prices_valid: prices,
+                    all_quantities_valid: quantities,
+                })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            // evaluate and evaluate_detailed agree.
+            #[test]
+            fn checkout_eval_agrees_with_detailed(ctx in arb_checkout_ctx()) {
+                let rules = checkout_readiness_rules();
+                let pred = eval_checkout(&ctx);
+                prop_assert_eq!(rules.evaluate(&pred), rules.evaluate_detailed(&pred).passed());
+            }
+
+            // Empty cart always fails checkout.
+            #[test]
+            fn empty_cart_always_fails(
+                total in (0i64..10_000_000).prop_map(|c| Decimal::new(c, 2)),
+            ) {
+                let ctx = CheckoutContext {
+                    item_count: 0,
+                    cart_total: total,
+                    all_prices_valid: true,
+                    all_quantities_valid: true,
+                };
+                prop_assert!(!checkout_readiness_rules().evaluate(&eval_checkout(&ctx)));
+            }
+
+            // Valid cart with reasonable values always passes.
+            #[test]
+            fn valid_cart_passes(
+                items in 1usize..=50,
+                total in (100i64..4_000_000).prop_map(|c| Decimal::new(c, 2)),
+            ) {
+                let ctx = CheckoutContext {
+                    item_count: items,
+                    cart_total: total,
+                    all_prices_valid: true,
+                    all_quantities_valid: true,
+                };
+                prop_assert!(checkout_readiness_rules().evaluate(&eval_checkout(&ctx)));
+            }
+
+            // Cart over max items fails.
+            #[test]
+            fn over_max_items_fails(items in 51usize..200) {
+                let ctx = CheckoutContext {
+                    item_count: items,
+                    cart_total: Decimal::new(5000, 2),
+                    all_prices_valid: true,
+                    all_quantities_valid: true,
+                };
+                prop_assert!(!checkout_readiness_rules().evaluate(&eval_checkout(&ctx)));
+            }
+        }
     }
 }

@@ -19,3 +19,4 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 shared = { path = "../shared", features = ["test-utils"] }
+proptest = "1"
