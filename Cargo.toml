@@ -5,6 +5,7 @@ members = [
     "shared",
     "identity",
     "catalog",
+    "cart",
     "order",
     "payment",
     "shipping",

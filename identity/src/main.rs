@@ -9,7 +9,7 @@ use std::error::Error;
 async fn main() -> Result<(), Box<dyn Error>> {
     ServiceBuilder::new("identity")
         .http_port_env("IDENTITY_PORT")
-        .db_url_env("IDENTITY_DB_URL")
+        .with_db("IDENTITY_DB_URL")
         .with_redis()
         .run_with_grpc(
             GrpcConfig {
@@ -17,11 +17,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 default_port: 50051,
             },
             |infra| {
-                let app_state = AppState::new(infra.db.clone(), infra.redis.clone());
+                let app_state = AppState::new(infra.require_db().clone(), infra.redis.clone());
                 app(app_state)
             },
             |infra, addr| async move {
-                let svc = IdentityGrpcService::new(infra.db);
+                let svc = IdentityGrpcService::new(infra.require_db().clone());
                 tonic::transport::Server::builder()
                     .add_service(IdentityServiceServer::new(svc))
                     .serve(addr)

@@ -5,8 +5,44 @@ use crate::health::health_routes;
 use crate::observability::init_tracing;
 use axum::Router;
 use std::error::Error;
+use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+
+// ---------------------------------------------------------------------------
+// InfraDep — infrastructure requirements as data (DOP ch.8 pattern)
+// ---------------------------------------------------------------------------
+
+/// Declares what infrastructure a service needs. Rules as data: each variant
+/// is a requirement, and `init_infra` is the interpreter that materializes them.
+#[derive(Debug, Clone)]
+pub enum InfraDep {
+    Postgres {
+        url_env: &'static str,
+        migrations_dir: &'static str,
+    },
+    Redis,
+}
+
+impl fmt::Display for InfraDep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Postgres { url_env, .. } => write!(f, "Postgres({})", url_env),
+            Self::Redis => write!(f, "Redis"),
+        }
+    }
+}
+
+/// Interpreter: describe all declared dependencies as a human-readable string.
+fn describe_deps(deps: &[InfraDep]) -> String {
+    if deps.is_empty() {
+        return "none".to_string();
+    }
+    deps.iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 // ---------------------------------------------------------------------------
 // Infra — initialized resources passed to service build closures
@@ -14,11 +50,28 @@ use std::net::SocketAddr;
 
 /// Infrastructure resources initialized by [`ServiceBuilder`].
 ///
-/// All fields are cheap to clone (Arc-backed).
+/// Fields are `Option` — only populated for dependencies declared via [`InfraDep`].
+/// Use `require_db()` / `require_redis()` for non-optional access with clear panics.
 #[derive(Clone)]
 pub struct Infra {
-    pub db: PgPool,
+    pub db: Option<PgPool>,
     pub redis: Option<redis::aio::ConnectionManager>,
+}
+
+impl Infra {
+    /// Returns the Postgres pool. Panics if the service did not declare a Postgres dependency.
+    pub fn require_db(&self) -> &PgPool {
+        self.db.as_ref().expect(
+            "BUG: service requires Postgres but ServiceBuilder was not configured with .with_db()",
+        )
+    }
+
+    /// Returns the Redis connection. Panics if Redis was not initialized.
+    pub fn require_redis(&self) -> &redis::aio::ConnectionManager {
+        self.redis.as_ref().expect(
+            "BUG: service requires Redis but ServiceBuilder was not configured with .with_redis()",
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -31,33 +84,40 @@ pub struct GrpcConfig {
 }
 
 // ---------------------------------------------------------------------------
-// ServiceBuilder — composable bootstrap
+// ServiceBuilder — composable bootstrap with data-oriented deps
 // ---------------------------------------------------------------------------
 
 /// Composable builder for service bootstrap.
 ///
-/// Initializes tracing, database, optional Redis, and serves HTTP
-/// (optionally with a gRPC sidecar). Health routes (`GET /health`)
-/// are merged automatically.
+/// Infrastructure requirements are declared as data via [`InfraDep`] variants.
+/// At startup, `init_infra` interprets them — only initializing what was declared.
 ///
-/// # Example (HTTP only)
+/// # Examples
 /// ```ignore
+/// // Service with Postgres + Redis
 /// ServiceBuilder::new("catalog")
 ///     .http_port_env("CATALOG_PORT")
-///     .db_url_env("CATALOG_DB_URL")
+///     .with_db("CATALOG_DB_URL")
 ///     .with_redis()
 ///     .run(|infra| {
-///         let state = AppState::new(infra.db.clone(), infra.redis.clone());
-///         app(state)
+///         let db = infra.require_db().clone();
+///         app(AppState::new(db, infra.redis.clone()))
+///     })
+///     .await
+///
+/// // Redis-only service (no Postgres)
+/// ServiceBuilder::new("cart")
+///     .http_port_env("CART_PORT")
+///     .with_redis()
+///     .run(|infra| {
+///         app(AppState::new(infra.require_redis().clone()))
 ///     })
 ///     .await
 /// ```
 pub struct ServiceBuilder {
     name: &'static str,
     http_port_env: &'static str,
-    db_url_env: &'static str,
-    migrations_dir: &'static str,
-    redis: bool,
+    deps: Vec<InfraDep>,
 }
 
 impl ServiceBuilder {
@@ -65,9 +125,7 @@ impl ServiceBuilder {
         Self {
             name,
             http_port_env: "PORT",
-            db_url_env: "DATABASE_URL",
-            migrations_dir: "./migrations",
-            redis: false,
+            deps: Vec::new(),
         }
     }
 
@@ -76,18 +134,27 @@ impl ServiceBuilder {
         self
     }
 
-    pub fn db_url_env(mut self, key: &'static str) -> Self {
-        self.db_url_env = key;
+    /// Declare a Postgres dependency with default migrations dir.
+    pub fn with_db(mut self, url_env: &'static str) -> Self {
+        self.deps.push(InfraDep::Postgres {
+            url_env,
+            migrations_dir: "./migrations",
+        });
         self
     }
 
-    pub fn migrations_dir(mut self, dir: &'static str) -> Self {
-        self.migrations_dir = dir;
+    /// Declare a Postgres dependency with custom migrations dir.
+    pub fn with_db_migrations(mut self, url_env: &'static str, dir: &'static str) -> Self {
+        self.deps.push(InfraDep::Postgres {
+            url_env,
+            migrations_dir: dir,
+        });
         self
     }
 
+    /// Declare a Redis dependency.
     pub fn with_redis(mut self) -> Self {
-        self.redis = true;
+        self.deps.push(InfraDep::Redis);
         self
     }
 
@@ -107,9 +174,6 @@ impl ServiceBuilder {
     }
 
     /// Run HTTP + gRPC servers concurrently.
-    ///
-    /// `build_app` borrows [`Infra`] (clone what you need).
-    /// `build_grpc` takes ownership of [`Infra`] so the returned future is `Send`.
     pub async fn run_with_grpc<F, G, Fut>(
         self,
         grpc_config: GrpcConfig,
@@ -143,16 +207,30 @@ impl ServiceBuilder {
         Ok(())
     }
 
+    /// Interpreter: walk the deps list and initialize each declared resource.
     async fn init_infra(&self) -> Result<Infra, Box<dyn Error>> {
         init_tracing(self.name);
-        let db_config = DbConfig::new(self.db_url_env);
-        let pool = init_db(db_config, self.migrations_dir).await?;
-        let redis = if self.redis {
-            init_optional_redis().await
-        } else {
-            None
-        };
-        Ok(Infra { db: pool, redis })
+        tracing::info!("{} infra deps: [{}]", self.name, describe_deps(&self.deps));
+
+        let mut db = None;
+        let mut redis = None;
+
+        for dep in &self.deps {
+            match dep {
+                InfraDep::Postgres {
+                    url_env,
+                    migrations_dir,
+                } => {
+                    let db_config = DbConfig::new(url_env);
+                    db = Some(init_db(db_config, migrations_dir).await?);
+                }
+                InfraDep::Redis => {
+                    redis = init_optional_redis().await;
+                }
+            }
+        }
+
+        Ok(Infra { db, redis })
     }
 
     fn parse_http_port(&self) -> u16 {
@@ -174,22 +252,79 @@ mod tests {
         let builder = ServiceBuilder::new("test-svc");
         assert_eq!(builder.name, "test-svc");
         assert_eq!(builder.http_port_env, "PORT");
-        assert_eq!(builder.db_url_env, "DATABASE_URL");
-        assert_eq!(builder.migrations_dir, "./migrations");
-        assert!(!builder.redis);
+        assert!(builder.deps.is_empty());
     }
 
     #[test]
-    fn builder_methods_override_defaults() {
-        let builder = ServiceBuilder::new("svc")
-            .http_port_env("MY_PORT")
-            .db_url_env("MY_DB")
-            .migrations_dir("./db/migrations")
+    fn with_db_adds_postgres_dep() {
+        let builder = ServiceBuilder::new("svc").with_db("MY_DB_URL");
+        assert_eq!(builder.deps.len(), 1);
+        assert!(matches!(
+            builder.deps[0],
+            InfraDep::Postgres {
+                url_env: "MY_DB_URL",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn with_redis_adds_redis_dep() {
+        let builder = ServiceBuilder::new("svc").with_redis();
+        assert_eq!(builder.deps.len(), 1);
+        assert!(matches!(builder.deps[0], InfraDep::Redis));
+    }
+
+    #[test]
+    fn multiple_deps_accumulate() {
+        let builder = ServiceBuilder::new("svc").with_db("DB_URL").with_redis();
+        assert_eq!(builder.deps.len(), 2);
+    }
+
+    #[test]
+    fn redis_only_has_no_postgres_dep() {
+        let builder = ServiceBuilder::new("cart")
+            .http_port_env("CART_PORT")
             .with_redis();
-        assert_eq!(builder.http_port_env, "MY_PORT");
-        assert_eq!(builder.db_url_env, "MY_DB");
-        assert_eq!(builder.migrations_dir, "./db/migrations");
-        assert!(builder.redis);
+        assert_eq!(builder.deps.len(), 1);
+        assert!(matches!(builder.deps[0], InfraDep::Redis));
+    }
+
+    #[test]
+    fn describe_deps_empty() {
+        assert_eq!(describe_deps(&[]), "none");
+    }
+
+    #[test]
+    fn describe_deps_formats_correctly() {
+        let deps = vec![
+            InfraDep::Postgres {
+                url_env: "DB_URL",
+                migrations_dir: "./migrations",
+            },
+            InfraDep::Redis,
+        ];
+        assert_eq!(describe_deps(&deps), "Postgres(DB_URL), Redis");
+    }
+
+    #[test]
+    fn infra_require_db_panics_when_none() {
+        let infra = Infra {
+            db: None,
+            redis: None,
+        };
+        let result = std::panic::catch_unwind(|| infra.require_db());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn infra_require_redis_panics_when_none() {
+        let infra = Infra {
+            db: None,
+            redis: None,
+        };
+        let result = std::panic::catch_unwind(|| infra.require_redis());
+        assert!(result.is_err());
     }
 
     #[test]

@@ -273,11 +273,12 @@ impl KafkaEventConsumer {
         let event_id = envelope.metadata.event_id;
         let event_type = envelope.metadata.event_type.to_string();
         let source_service = envelope.metadata.source_service.to_string();
+        let consumer_group = self.config.group_id.clone();
         let mut last_error = String::new();
 
         for attempt in 0..=self.config.max_retries {
             match self
-                .try_process_once(envelope, &event_type, &source_service)
+                .try_process_once(envelope, &event_type, &source_service, &consumer_group)
                 .await
             {
                 AttemptResult::Committed => {
@@ -347,6 +348,7 @@ impl KafkaEventConsumer {
         envelope: &EventEnvelope,
         event_type: &str,
         source_service: &str,
+        consumer_group: &str,
     ) -> AttemptResult {
         let event_id = envelope.metadata.event_id;
 
@@ -358,7 +360,7 @@ impl KafkaEventConsumer {
             }
         };
 
-        match is_event_processed(&mut *tx, event_id).await {
+        match is_event_processed(&mut *tx, event_id, consumer_group).await {
             Ok(true) => {
                 if let Err(e) = tx.commit().await {
                     tracing::error!(error = %e, "Failed to commit skip-transaction");
@@ -376,8 +378,14 @@ impl KafkaEventConsumer {
 
         match self.handler.handle(envelope, &mut tx).await {
             Ok(()) => {
-                if let Err(e) =
-                    mark_event_processed(&mut *tx, event_id, event_type, source_service).await
+                if let Err(e) = mark_event_processed(
+                    &mut *tx,
+                    event_id,
+                    event_type,
+                    source_service,
+                    consumer_group,
+                )
+                .await
                 {
                     tracing::error!(error = %e, "Failed to mark event processed");
                     return AttemptResult::DbError;

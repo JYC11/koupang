@@ -12,6 +12,7 @@ pub mod new_types;
 pub mod observability;
 pub mod outbox;
 pub mod responses;
+pub mod rules;
 pub mod server;
 
 #[cfg(feature = "test-utils")]
