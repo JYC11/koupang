@@ -35,22 +35,27 @@ Adapted from [TigerBeetle's Tiger Style](https://github.com/tigerbeetle/tigerbee
 - **Declare at the smallest possible scope.** Fewer live variables = fewer bugs.
 - **Calculate and check close to use.** Gap between computation and consumption is where bugs hide (POCPOU).
 
-### Types and domain modeling
+### Data-Oriented Programming (ADR-012)
 
-- Favour ADTs, value objects, rich domain models to make illegal states unrepresentable.
-- Define errors out of existence — prefer validated newtypes so error cases can't happen.
+Adapted from Chris Kiehl's *Data-Oriented Programming in Java*. Core principles:
 
-### Validation pattern selection (ADR-012)
+1. **Separate data from behavior.** Data lives in enums, structs, value objects. Behavior lives in free functions and interpreters over data. No god-objects mixing state + methods.
+2. **Data as first-class.** Domain concepts are types — `OrderId` not `Uuid`, `Price` not `Decimal`, `OrderStatus::Pending` not `"pending"`. Validated newtypes make illegal states unrepresentable.
+3. **One data structure, many interpreters.** `Rule<A>` has 6 interpreters. Adding an interpreter doesn't touch existing code. Adding a variant touches all interpreters (compiler-enforced exhaustive match).
+4. **Properties guide the design.** When an algebraic property is hard to express, the representation is wrong. Use property-based tests (proptest) to verify laws and let failures push toward better types.
 
-Pick the simplest tool that fits. Escalate only when the simpler tool doesn't work.
+### Validation patterns
+
+Pick the simplest tool. Escalate only when simpler doesn't work.
 
 | # of checks | Pattern | Example |
 |-------------|---------|---------|
 | 1-3 | Direct `if`-guards | `add_item()`: single `count >= MAX` check |
-| 4+ | `Rule<A>` tree (DOP) | `checkout_readiness_rules()`: 6 composable checks |
+| 4+ | `Rule<A>` tree | `checkout_readiness_rules()`: 6 composable checks |
 | State machine | Runtime enum + `transition_to()` | `OrderStatus`, `PaymentState` |
+| In-memory linear (2-4 states) | Typestate | Builder pattern |
 
-**`Rule<A>` trees** — for 4+ checks needing aggregated failures, `describe()` output, or `All`/`Any`/`Not` composition. Each service defines: a check enum with `Display`, a context struct (plain data), a pure predicate fn, and rule trees. Thresholds live as `const` in `rules.rs`. Wiring:
+**`Rule<A>` trees** — each service defines: a check enum with `Display`, a context struct (plain data), a pure predicate fn, and rule trees. Thresholds as `const` in `rules.rs`. Wiring:
 
 ```rust
 let ctx = XxxContext::from(&validated);
@@ -60,13 +65,22 @@ if !result.passed() {
 }
 ```
 
-**Runtime enum state machines** — for DB-persisted or event-derived state. Use `transition_to()` with allowed-transition tables. Do NOT use typestate for these.
+**Runtime enum state machines** — for DB-persisted or event-derived state. `transition_to()` with allowed-transition tables. Do NOT use typestate when: state comes from DB/events, external systems drive transitions, 5+ states, or cancellation spans multiple states.
 
-**Typestate** — only for in-memory linear construction with 2-4 states (e.g., builder pattern). Don't use when: state comes from DB rows/events (runtime, not compile-time), external systems drive transitions, 5+ states with shared operations, or cancellation spans multiple states.
+### Property-based testing
+
+Use proptest to verify algebraic laws — these catch design flaws that example-based tests miss:
+
+- **Rule algebra**: `evaluate` and `evaluate_detailed` agree on pass/fail; `All` is order-independent; `collect_failures` is empty iff `passed()`.
+- **State machines**: terminal states have no valid transitions; transition graph has no unreachable states.
+- **Value objects**: construction rejects all out-of-bound values (fuzz the boundaries).
+- **Event processing**: handle + mark_processed is idempotent.
+
+When a property is hard to state or frequently violated, the representation is wrong — fix the types, not the test.
 
 ### Per-service error enums
 
-Each service owns its error type (e.g., `OrderError`, `PaymentError`, `CartError`) with semantic variants (`ValidationFailed`, `InvalidTransition`, `NotFound`, `Infra(AppError)`, etc.). `From<AppError> for ServiceError` wraps infra errors inward. `From<ServiceError> for AppError` maps to HTTP status codes at the route boundary. Domain logic never returns raw `AppError::BadRequest(String)`.
+Each service owns its error type (`OrderError`, `PaymentError`, `CartError`) with semantic variants (`ValidationFailed`, `InvalidTransition`, `NotFound`, `Infra(AppError)`, etc.). `From<AppError> for ServiceError` wraps infra inward. `From<ServiceError> for AppError` maps to HTTP at the boundary. Domain logic never returns raw `AppError::BadRequest(String)`.
 
 ## Performance
 

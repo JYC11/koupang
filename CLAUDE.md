@@ -37,7 +37,7 @@
 | 009 | Postgres ltree for categories | Materialized path hierarchy, `<@`/`@>` tree queries |
 | 010 | Inter-service communication   | REST for queries, Kafka events for state changes    |
 | 011 | Event schema conventions      | `{svc}.{entity}.{verb}` naming, versioned envelope  |
-| 012 | Data-oriented business rules  | `Rule<A>` algebra, per-service error enums, check enums |
+| 012 | Data-oriented programming     | DOP principles, `Rule<A>` algebra, per-service errors, property testing |
 
 ## Tech Stack
 
