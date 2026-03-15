@@ -6,6 +6,13 @@ Implement the core purchasing saga: order creation, payment authorization, inven
 
 Depends on Plan 1 (Kafka, outbox-core, event system, ServiceBuilder).
 
+### Research Sources (2026-03-15)
+
+- [young0264/payments](https://github.com/young0264/payments) — Kotlin/Spring Boot payment orchestration (idempotency 3-case logic, distributed lock, circuit breaker, amount tampering detection)
+- [Toss Payments — Idempotency](https://docs.tosspayments.com/blog/what-is-idempotency) — IETF idempotency key header, 409/422 error semantics, payload hash check
+- [Toss Payments — Approval/Capture](https://www.tosspayments.com/blog/articles/33907) — Two-phase auth+capture, query-before-retry on timeout, auth hold expiry (5-7 days)
+- [Hyperswitch](https://github.com/juspay/hyperswitch) — Rust payment orchestration (ValidateStatusForOperation trait, two-level status model, structured GatewayErrorResponse, enum-based partial updates)
+
 ---
 
 ## 1. Order Service
@@ -40,12 +47,14 @@ CREATE TABLE order_items (
     product_name  VARCHAR(500) NOT NULL,
     sku_code      VARCHAR(100) NOT NULL,
     quantity      INTEGER NOT NULL,
+    seller_id     UUID NOT NULL,              -- snapshotted at order creation (plan review 2A)
     unit_price    NUMERIC(19, 4) NOT NULL,
     total_price   NUMERIC(19, 4) NOT NULL,
     CONSTRAINT chk_quantity CHECK (quantity > 0),
     CONSTRAINT chk_unit_price CHECK (unit_price >= 0),
     CONSTRAINT chk_total_price CHECK (total_price >= 0)
 );
+CREATE INDEX idx_order_items_seller ON order_items(seller_id);  -- plan review 12A
 
 CREATE TABLE outbox (...);           -- per outbox-core requirements
 CREATE TABLE processed_events (...); -- same as Plan 1 template
@@ -85,7 +94,7 @@ impl OrderStatus {
 - `ShippingAddress` (JSONB wrapper: street, city, state, postal_code, country)
 - `Quantity` (i32 > 0)
 - `IdempotencyKey` (non-empty, max 255)
-- `Price`, `Currency` (defined locally, same pattern as catalog)
+- `Money`, `Currency` (from `shared::money`, plan review 8A — consolidated across all services)
 
 ### 1.4 Endpoints
 
@@ -119,7 +128,7 @@ Spawned as background tasks in `main.rs`:
   - `InventoryReservationFailed` → cancel order
 
 - **payments.events consumer** (group: `order-service`):
-  - `PaymentAuthorized` → if status == InventoryReserved, transition to Confirmed, write `OrderConfirmed` to outbox
+  - `PaymentAuthorized` → if status == InventoryReserved, transition to PaymentAuthorized, then auto-transition to Confirmed, write `OrderConfirmed` to outbox (two sequential status updates in one handler — PaymentAuthorized state exists for cancellation window and audit trail)
   - `PaymentFailed` → cancel order, write `OrderCancelled` to outbox
   - `PaymentTimedOut` → cancel order, write `OrderCancelled` to outbox
 
@@ -170,7 +179,8 @@ CREATE TABLE accounts (
     CONSTRAINT chk_normal_balance CHECK (normal_balance IN ('debit', 'credit')),
     CONSTRAINT chk_account_type CHECK (account_type IN (
         'buyer', 'gateway_holding', 'platform_revenue', 'seller_payable'
-    ))
+    )),
+    CONSTRAINT uq_accounts UNIQUE (reference_id, account_type, currency)  -- plan review 4A
 );
 CREATE INDEX idx_accounts_ref ON accounts (reference_id, account_type);
 
@@ -198,30 +208,16 @@ CREATE TABLE ledger_entries (
     account_id      UUID NOT NULL REFERENCES accounts (id),
     direction       VARCHAR(10) NOT NULL,
     amount          NUMERIC(19, 4) NOT NULL,
-    status          VARCHAR(20) NOT NULL DEFAULT 'pending',
+    -- status removed: derived from parent ledger_transactions.status (plan review 3A)
     CONSTRAINT chk_amount CHECK (amount > 0),
-    CONSTRAINT chk_direction CHECK (direction IN ('debit', 'credit')),
-    CONSTRAINT chk_status CHECK (status IN ('pending', 'posted', 'discarded'))
+    CONSTRAINT chk_direction CHECK (direction IN ('debit', 'credit'))
 );
 
--- Convenience: derive current payment state per order
-CREATE VIEW payment_status AS
-SELECT DISTINCT ON (order_id)
-    order_id,
-    transaction_type,
-    status AS transaction_status,
-    CASE
-        WHEN transaction_type = 'authorization' AND status = 'posted' THEN 'authorized'
-        WHEN transaction_type = 'capture' AND status = 'posted' THEN 'captured'
-        WHEN transaction_type = 'void' AND status = 'posted' THEN 'voided'
-        WHEN transaction_type = 'refund' AND status = 'posted' THEN 'refunded'
-        WHEN status = 'pending' THEN 'pending'
-        WHEN status = 'discarded' THEN 'failed'
-    END AS payment_state
-FROM ledger_transactions
-ORDER BY order_id, created_at DESC;
+-- payment_status view REMOVED (plan review 6A): state derived in application code
+-- via exhaustive match over all transactions for an order. More correct for
+-- partial refunds and complex transaction histories.
 
--- Convenience: account balances
+-- Convenience: account balances (updated for plan review 3A: join through transactions for status)
 CREATE VIEW account_balances AS
 SELECT
     a.id AS account_id,
@@ -229,14 +225,15 @@ SELECT
     a.reference_id,
     a.normal_balance,
     a.currency,
-    COALESCE(SUM(CASE WHEN e.direction = 'debit' THEN e.amount ELSE 0 END), 0) AS total_debits,
-    COALESCE(SUM(CASE WHEN e.direction = 'credit' THEN e.amount ELSE 0 END), 0) AS total_credits,
+    COALESCE(SUM(CASE WHEN e.direction = 'debit' AND t.id IS NOT NULL THEN e.amount ELSE 0 END), 0) AS total_debits,
+    COALESCE(SUM(CASE WHEN e.direction = 'credit' AND t.id IS NOT NULL THEN e.amount ELSE 0 END), 0) AS total_credits,
     CASE a.normal_balance
-        WHEN 'debit' THEN COALESCE(SUM(CASE WHEN e.direction = 'debit' THEN e.amount ELSE -e.amount END), 0)
-        WHEN 'credit' THEN COALESCE(SUM(CASE WHEN e.direction = 'credit' THEN e.amount ELSE -e.amount END), 0)
+        WHEN 'debit' THEN COALESCE(SUM(CASE WHEN t.id IS NOT NULL THEN (CASE WHEN e.direction = 'debit' THEN e.amount ELSE -e.amount END) ELSE 0 END), 0)
+        WHEN 'credit' THEN COALESCE(SUM(CASE WHEN t.id IS NOT NULL THEN (CASE WHEN e.direction = 'credit' THEN e.amount ELSE -e.amount END) ELSE 0 END), 0)
     END AS balance
 FROM accounts a
-LEFT JOIN ledger_entries e ON e.account_id = a.id AND e.status = 'posted'
+LEFT JOIN ledger_entries e ON e.account_id = a.id
+LEFT JOIN ledger_transactions t ON t.id = e.transaction_id AND t.status = 'posted'
 GROUP BY a.id, a.account_type, a.reference_id, a.normal_balance, a.currency;
 
 CREATE TABLE outbox (...);
@@ -338,28 +335,166 @@ Latest discarded (no posted)→ Failed
 
 The `payment_status` view provides convenience access. The `account_balances` view answers financial queries.
 
-### 2.8 Mock Payment Gateway
+#### ValidateStatusForOperation Pattern (from Hyperswitch)
+
+Each payment operation validates the current derived state via exhaustive match:
+
+```rust
+impl PaymentState {
+    /// Returns Ok(()) if the operation is allowed in this state, Err otherwise.
+    pub fn validate_for_authorize(&self) -> Result<(), PaymentError> {
+        match self {
+            Self::New => Ok(()),                        // allowed
+            Self::Failed => Ok(()),                     // retry after failure (case 3 idempotency)
+            state => Err(PaymentError::UnexpectedState { current: *state, operation: "authorize" }),
+        }
+    }
+    pub fn validate_for_capture(&self) -> Result<(), PaymentError> {
+        match self {
+            Self::Authorized => Ok(()),
+            state => Err(PaymentError::UnexpectedState { current: *state, operation: "capture" }),
+        }
+    }
+    // ... validate_for_void, validate_for_refund
+}
+```
+
+Exhaustive `match` (no wildcard) forces compile-time review when new states are added — a pattern from Hyperswitch's `ValidateStatusForOperation` trait.
+
+### 2.8 Payment Gateway Trait + Mock
 
 ```rust
 #[async_trait]
 pub trait PaymentGateway: Send + Sync {
     async fn authorize(&self, idempotency_key: &str, order_id: Uuid, amount: Decimal, currency: &str)
-        -> Result<GatewayAuthResult, AppError>;
-    async fn capture(&self, gateway_reference: &str) -> Result<GatewayCaptureResult, AppError>;
-    async fn void(&self, gateway_reference: &str) -> Result<GatewayVoidResult, AppError>;
+        -> Result<GatewayAuthResult, PaymentError>;  // plan review 7A: domain error type
+    async fn capture(&self, gateway_reference: &str) -> Result<GatewayCaptureResult, PaymentError>;
+    async fn void(&self, gateway_reference: &str) -> Result<GatewayVoidResult, PaymentError>;
     async fn refund(&self, gateway_reference: &str, amount: Decimal)
-        -> Result<GatewayRefundResult, AppError>;
+        -> Result<GatewayRefundResult, PaymentError>;
+}
+
+/// Gateway results include the approved amount for tamper detection
+pub struct GatewayAuthResult {
+    pub gateway_reference: String,
+    pub approved_amount: Decimal,  // gateway-confirmed amount
+    pub status: GatewayStatus,
+}
+
+/// Structured error from gateway (from Hyperswitch ErrorResponse pattern)
+pub struct GatewayErrorResponse {
+    pub code: String,             // e.g., "INSUFFICIENT_FUNDS"
+    pub message: String,          // human-readable
+    pub reason: Option<String>,   // detailed reason
+    pub is_retryable: bool,       // infra failure vs permanent decline
 }
 
 pub struct MockPaymentGateway { success_rate: f64 }
-// ::always_succeeds() / ::always_fails() for testing
+// ::always_succeeds() / ::always_fails() / ::tampered_amount(Decimal) for testing
 // Simulated 50ms latency, random reference IDs
 // Accepts idempotency_key on authorize()
 ```
 
 Follows ADR-006 pattern (EmailService trait with mock). `idempotency_key` on `authorize()` prevents duplicate charges.
 
-### 2.9 Gateway Timeout Handling
+Each concrete gateway maps its native error codes to `GatewayErrorResponse`. The `is_retryable` flag drives both retry logic and circuit breaker classification — only retryable (infra) failures trip the breaker.
+
+### 2.9 Amount Tampering Detection
+
+After gateway authorization, the service compares the gateway-approved amount against the merchant-requested amount. On mismatch, the gateway authorization is automatically voided and the transaction is marked as failed.
+
+```rust
+let auth_result = gateway.authorize(idempotency_key, order_id, amount, currency).await?;
+if auth_result.approved_amount != amount {
+    // Auto-void the gateway authorization
+    gateway.void(&auth_result.gateway_reference).await?;
+    // Discard ledger entries, write PaymentFailed event
+    // reason: "Amount tampering detected: requested={amount}, approved={auth_result.approved_amount}"
+    return Err(PaymentError::AmountTampered { requested: amount, approved: auth_result.approved_amount });
+}
+```
+
+This prevents a class of fraud where the amount is tampered between the merchant's checkout and the gateway. Tests: `AmountVerificationTest` with mock gateway returning mismatched amounts.
+
+### 2.10 Distributed Lock on Payment Operations
+
+Payment gateway calls must be protected from concurrent duplicate processing (e.g., duplicate Kafka delivery, retry storms). A Redis distributed lock is acquired **outside** the database transaction.
+
+```rust
+// Flow: acquire lock → begin txn → do work → commit → release lock
+let lock_key = format!("payment:lock:{order_id}");
+let lock = redis_lock.acquire(&lock_key, Duration::from_secs(30)).await?;
+// ... begin transaction, authorize, write entries, commit ...
+lock.release().await;
+```
+
+Key design points:
+- Lock acquired OUTSIDE the transaction boundary (prevents two concurrent requests from both starting transactions before one acquires the lock)
+- Lock key: `payment:lock:{order_id}` — one concurrent payment operation per order
+- TTL: 30s (matches gateway timeout) — auto-expires if server crashes
+- **Atomic release via Lua script** (not GET+DELETE which has a race condition):
+  ```lua
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+      return redis.call("DEL", KEYS[1])
+  end
+  return 0
+  ```
+- Lock value: random UUID per acquisition — prevents releasing another process's lock
+- On lock conflict: return idempotency conflict error (409)
+
+Implementation: add `DistributedLock` to `shared` crate (reusable by other services). Takes `RedisCache` as backend.
+
+### 2.11 Circuit Breaker on Gateway Calls
+
+Wrap `PaymentGateway` with a circuit breaker to prevent cascading failures when the external PG is down.
+
+```rust
+pub struct CircuitBreakerGateway<G: PaymentGateway> {
+    inner: G,
+    breaker: CircuitBreaker,  // from shared crate or manual impl
+}
+```
+
+Configuration:
+- Sliding window: 10 calls (count-based)
+- Failure threshold: 50%
+- Open duration: 30s
+- Half-open test calls: 3
+- **Business failures excluded**: `PaymentError::Declined`, `PaymentError::InsufficientFunds` etc. do NOT trip the breaker — only infrastructure failures (timeouts, connection errors) count
+- When breaker is open: return `PaymentError::GatewayUnavailable` (maps to 503)
+
+This follows the decorator pattern — `CircuitBreakerGateway` implements `PaymentGateway` and wraps any concrete implementation. Tests use the inner `MockPaymentGateway` directly (no circuit breaker in unit tests); integration tests can optionally test circuit breaker behavior.
+
+### 2.12 Idempotency Handling (3-Case Logic)
+
+The `idempotency_key` on `ledger_transactions` supports three cases for authorization requests:
+
+```
+Case 1: Same idempotency_key exists → return existing transaction (safe retry)
+Case 2: Same order_id + different key + non-failed status → error (duplicate order, 409)
+Case 3: Same order_id + failed status + new key → allow retry (new authorization attempt)
+```
+
+This handles:
+- **Network retries**: Client resends with same key → gets same response (case 1)
+- **Accidental duplicates**: Different key for same order → rejected (case 2)
+- **Recovery from failure**: Previous attempt failed → new key allows retry (case 3)
+
+### 2.13 Idempotency Error Handling (per IETF + Toss)
+
+Per [IETF draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) and Toss Payments' implementation:
+
+| HTTP Status | Scenario |
+|-------------|----------|
+| **400** | `Idempotency-Key` header missing on endpoints that require it, or key format invalid |
+| **409** | Same key still in-flight (distributed lock held by previous request) |
+| **422** | Same key but request payload differs from original (payload hash mismatch) |
+
+**Payload hash check**: On first request, store a hash of the request body alongside the idempotency record. On retry, compare hashes — if they differ, return 422. This catches bugs where a client reuses an idempotency key with different parameters.
+
+**Query-before-retry on timeout** (Toss pattern): When a gateway call times out, always query the gateway for current state before retrying the mutation. Never blindly retry — the original call may have succeeded. This is implemented in the timeout handler (§2.14).
+
+### 2.14 Gateway Timeout Handling
 
 Config: `payment_timeout_seconds` (default 30s).
 
@@ -372,7 +507,7 @@ InventoryReserved → [Payment: authorize starts] → (30s timeout)
   → (gateway late success) → [Payment: auto-void]
 ```
 
-### 2.10 Endpoints
+### 2.15 Endpoints
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -380,35 +515,43 @@ InventoryReserved → [Payment: authorize starts] → (30s timeout)
 
 Payment service is primarily event-driven. Most logic lives in consumers.
 
-### 2.11 Kafka Consumers
+### 2.16 Kafka Consumers
 
 - **inventory.events** (group: `payment-service`):
   - `InventoryReserved` → authorize payment via gateway → write `PaymentAuthorized` or `PaymentFailed` to outbox
 
 - **orders.events** (group: `payment-service`):
-  - `OrderConfirmed` → capture authorized payment
+  - `OrderConfirmed` → capture authorized payment. If capture fails: write `capture_retry` to outbox with exponential backoff (plan review 10A). Order stays Confirmed.
   - `OrderCancelled` → void (if authorized) or refund (if captured)
 
-### 2.12 File Structure
+### 2.17 File Structure
 
 ```
 payment/src/
 ├── main.rs, lib.rs
 ├── ledger/        accounts, transactions, entries — repository, entities, value_objects
 ├── payments/      routes, service, domain, dtos (orchestrates ledger operations)
-├── gateway/       traits (PaymentGateway), mock (MockPaymentGateway)
+├── gateway/       traits (PaymentGateway), mock (MockPaymentGateway), circuit_breaker (decorator)
 ├── outbox/        entities, repository, relay (via outbox-core)
 ├── consumers/     inventory_events, order_events
 └── events/        types (PaymentAuthorized, PaymentFailed, PaymentTimedOut, PaymentCaptured, PaymentVoided)
+
+# Shared crate additions:
+shared/src/lock/   distributed_lock.rs (Redis SETNX + Lua atomic release)
 ```
 
-### 2.13 Future Work (Out of Scope)
+### 2.18 Future Work (Out of Scope)
 
 - **Platform commission**: Double-entry model supports it (see §2.6). Needs commission_rate config + capture split logic. No schema changes.
 - **Seller disbursements**: Periodic payout from `seller_payable` accounts. Needs a disbursement scheduler + new account type (`seller_paid`). The ledger data is already there.
 - **Saved payment methods**: Lives in identity service (user's saved cards) or a dedicated payment-methods service. Not payment service (which handles transactions, not card storage).
 - **Subscriptions**: Ledger entries support recurring charges. Implementation deferred.
 - **Seller refusal to fulfill**: Requires a seller fulfillment workflow (accept/reject order) — a post-confirmation feature. Currently `Confirmed → Shipped` is direct.
+- **Authorization hold expiry**: Card auths typically expire after 5-7 days (per Toss/industry standard). A background job should detect uncaptured auths nearing expiry and either auto-capture or auto-void. Not needed for MVP with mock gateway.
+- **Idempotency key TTL**: Idempotency records could expire after a configurable retention period (per IETF spec), allowing key reuse. Not needed initially — DB unique constraints are sufficient.
+- **PG failover routing**: Route to alternate PG when primary is down (Hyperswitch has sophisticated routing; young0264 listed this as roadmap). Requires multiple `PaymentGateway` implementations.
+- **Reconciliation job**: Periodic comparison of ledger state vs gateway state to detect drift. The double-entry model makes this queryable via `account_balances` view.
+- **Shared idempotency middleware**: Extract idempotency key handling (header parsing, DB lookup, payload hash, 409/422 responses) into a reusable axum middleware in `shared` crate. Both order and payment services need it.
 
 ---
 
@@ -603,7 +746,7 @@ POST /orders/{id}/cancel → OrderCancelled
 
 ---
 
-## 8. Testing (~160 total, per test-standards.md)
+## 8. Testing (~185 total, per test-standards.md)
 
 ### Order Service (~65 tests)
 - Value objects: status transitions, idempotency key, quantity (~12)
@@ -611,12 +754,16 @@ POST /orders/{id}/cancel → OrderCancelled
 - Service: create, handle events, idempotency, cancel, seller query (~20)
 - Router: HTTP integration, auth, response shapes (~18)
 
-### Payment Service (~55 tests)
+### Payment Service (~80 tests)
 - Value objects: account types, transaction types, entry directions (~8)
 - Gateway: mock authorize/capture/void/refund, idempotency (~10)
+- Amount tampering: mock gateway returning mismatched amount, auto-void verification (~4)
+- Circuit breaker: pass-through, breaker opens on infra failures, business failures excluded (~5)
+- Distributed lock: concurrent authorization prevention, lock expiry, idempotency conflict (~4)
 - Repository: account creation, transaction + paired entries, status view, balance view, outbox (~15)
-- Service: event handlers with success/fail/timeout mocks, entry pairing correctness, balance invariants (~14)
+- Service: event handlers with success/fail/timeout mocks, entry pairing correctness, balance invariants, 3-case idempotency logic (~18)
 - Router: HTTP integration (~8)
+- Shared distributed lock: acquire/release, atomic Lua release, TTL expiry (~8)
 
 ### Catalog Inventory (~30 tests)
 - Reserve stock, release, confirm (~10)
@@ -624,7 +771,7 @@ POST /orders/{id}/cancel → OrderCancelled
 - Event handler integration (~7)
 - Availability view used in product reads (~5)
 
-### Saga Flow Tests (~10)
+### Saga Flow Tests (~12)
 Direct service-to-service calls (no Kafka) simulating complete flows:
 ```rust
 async fn saga_happy_path() {
@@ -634,7 +781,7 @@ async fn saga_happy_path() {
     // 4. Call order_service.handle_payment_authorized() → verify confirmed
 }
 ```
-Tests: happy path, inventory failure, payment failure, payment timeout, manual cancel.
+Tests: happy path, inventory failure, payment failure, payment timeout, manual cancel (pre-auth), manual cancel (post-auth, triggers void), manual cancel (post-capture, triggers refund). (Plan review 11A: added S6 + S7 cancel variants.)
 
 Infra failure simulation: Use `MockPaymentGateway::always_fails()` for payment failures. Kafka failures handled by outbox (events stay in outbox). Skip chaos testing for now.
 
@@ -647,15 +794,17 @@ Infra failure simulation: Use `MockPaymentGateway::always_fails()` for payment f
 3. Order: service (create, get, list, cancel — no events yet)
 4. Order: routes + router tests (including seller endpoint)
 5. Order: outbox (via outbox-core) + relay
-6. Payment: double-entry schema (accounts, transactions, entries) + repository
-7. Payment: gateway trait + mock (with idempotency key)
-8. Payment: service + event handlers (paired entries, timeout handling)
-9. Payment: routes + balance/status views
-10. Catalog: inventory migration (including sku_availability view) + repository
-11. Catalog: inventory service + event handlers
-12. Wire Kafka consumers in each main.rs
-13. Saga integration tests
-14. CLAUDE.md for order and payment
+6. Shared: distributed lock (Redis Lua script, reusable across services)
+7. Payment: double-entry schema (accounts, transactions, entries) + repository
+8. Payment: gateway trait + mock (with idempotency key + approved_amount)
+9. Payment: circuit breaker gateway decorator
+10. Payment: service + event handlers (paired entries, timeout handling, amount tamper detection, 3-case idempotency, distributed lock)
+11. Payment: routes + balance/status views
+12. Catalog: inventory migration (including sku_availability view) + repository
+13. Catalog: inventory service + event handlers
+14. Wire Kafka consumers in each main.rs
+15. Saga integration tests
+16. CLAUDE.md for order and payment
 
 ---
 

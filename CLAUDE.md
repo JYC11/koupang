@@ -68,55 +68,7 @@ See `.plan/human-todos.md` for full list with crate links and decision status.
 
 ## Development Rules
 
-- **Every bug fix must include a test** — if a bug is found, write a regression test that would have caught it before fixing the implementation.
-- **Code Smells**
-  - god functions are bad
-  - overly fragmented functions are bad
-  - circular dependencies are bad, dependencies should be acyclic and unidirectional
-  - pass through methods: a method that only invokes another method and does nothing else is bad
-- **Development Heuristics**
-  - favour using ADTs, value objects, rich domain models to make illegal states unrepresentable 
-  - threshold for abstraction 4+ (DRY principle), 1-3 times no abstraction (YAGNI)
-    - if unsure, repeat a bit more until abstraction becomes very obvious
-  - favour efficient SQL queries, the less I/O the better
-    - use LATERAL JOINs with `json_agg`/`json_build_object` to build deduplicated child arrays and avoid cartesian products when joining parent → child entities
-    - use batch WHERE IN to get many if joining is awkward
-    - like the abstraction comment above, do SQL queries the simple way a couple times before finding patterns you can make efficient
-    - caveats: sharding and partitioning dbs can screw this up so keep this in mind
-  - modules should be deep (strong functionality but simple interfaces) and minimize unnecessary information from being shown to the user of the modules
-  - different layer, different abstraction — each layer in `routes → service → domain → repository` should operate at a distinct level of abstraction; if two adjacent layers use the same vocabulary, one is probably unnecessary
-  - define errors out of existence — prefer validated newtypes and type states so error cases can't happen; handle the remaining errors that types can't prevent
-  - in an unsure problem area, employ tactical programming (get things done focus) to figure out patterns then do a clean up of them after with strategic programming (long term maintenance focus)
-  - complexity is incremental — each small shortcut compounds; when cleaning up tactical code, fix the small things too
-  - too much specialization of purpose can make the code too complicated
-  - comment only things that are not obvious from the code
-- **Error Handling**
-  - domain/service layers return `Result<T, ServiceError>` with per-service error enums (e.g., `OrderError`)
-  - `From<ServiceError> for AppError` impl maps domain errors to HTTP responses at route boundary
-  - infrastructure errors (sqlx, redis) wrapped as `Infra(#[from] AppError)` variant
-  - `unwrap`/`expect` only in tests and provably infallible cases (e.g., compiled regex)
-  - never silently swallow errors
-- **Naming Conventions**
-
-  | Element | Convention | Example |
-  |---------|-----------|---------|
-  | Request/Response DTOs | `VerbNounRequest/Response` | `CreateProductRequest` |
-  | Service structs | `NounService` | `ProductService` |
-  | Repository structs | `NounRepository` | `ProductRepository` |
-  | Domain models | Plain noun | `Product`, `Brand` |
-  | Route functions | `verb_noun` snake_case | `create_product`, `get_product_by_id` |
-  | Modules | Plural noun directories | `products/`, `categories/` |
-  | Migrations | `NNNN_descriptive_name` | `0001_init.sql` |
-
-- **Git Workflow**
-  - commit after completing a logical unit of work (feature, fix, refactor) — not after every file edit
-  - do not push unless explicitly asked
-  - branch naming: `feat/short-description`, `fix/short-description`, `refactor/short-description`
-  - commit messages: imperative mood, `type: description` (e.g., `feat: add order state machine`, `fix: prevent double stock reservation`)
-- **Refactoring Scope**
-  - refactor in the same PR if <30 min of work; otherwise create a follow-up `br` task
-  - tactical code is fine during exploration; clean up before the feature is "done"
-- if any of the development rules are not clear, ESCALATE = stop and ask the user (or the orchestrating agent in multi-agent setups) before proceeding
+All coding style, naming, error handling, git workflow, and architectural heuristics live in **[STYLE.md](STYLE.md)**. Read it before writing code.
 
 ## Reference Skills (auto-triggered, not manually loaded)
 
