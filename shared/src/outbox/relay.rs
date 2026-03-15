@@ -7,6 +7,7 @@ use crate::config::relay_config::RelayConfig;
 use crate::db::PgPool;
 use crate::errors::AppError;
 use crate::events::{EventEnvelope, EventPublisher};
+use crate::outbox::dedup;
 use crate::outbox::repository::{
     claim_batch, cleanup_published, delete_published, mark_published, mark_retry_or_failed,
     release_stale_locks,
@@ -25,6 +26,9 @@ pub struct OutboxRelay {
     publisher: Arc<dyn EventPublisher>,
     config: RelayConfig,
     heartbeat: Arc<RelayHeartbeat>,
+    /// Optional Redis connection for publish dedup cache.
+    /// Prevents duplicate Kafka publishes when mark_published fails after a successful publish.
+    redis: Option<redis::aio::ConnectionManager>,
 }
 
 impl OutboxRelay {
@@ -34,7 +38,13 @@ impl OutboxRelay {
             publisher,
             config,
             heartbeat: Arc::new(RelayHeartbeat::new()),
+            redis: None,
         }
+    }
+
+    pub fn with_redis(mut self, redis: Option<redis::aio::ConnectionManager>) -> Self {
+        self.redis = redis;
+        self
     }
 
     /// Returns a handle to the relay's heartbeat tracker.
@@ -165,6 +175,24 @@ impl OutboxRelay {
         tracing::debug!(count, "Processing outbox batch");
 
         for mut event in events {
+            // Skip re-publishing if Redis dedup cache confirms this was already published.
+            // This prevents duplicates when mark_published failed after a successful Kafka publish.
+            if let Some(ref redis) = self.redis {
+                if dedup::is_published(redis, &event.event_id).await {
+                    tracing::info!(
+                        event_id = %event.event_id,
+                        "Skipping already-published event (Redis dedup hit)"
+                    );
+                    // Still try to mark as published in DB since the previous attempt failed
+                    let _ = if self.config.delete_on_publish {
+                        delete_published(&self.pool, event.id).await
+                    } else {
+                        mark_published(&self.pool, event.id).await
+                    };
+                    continue;
+                }
+            }
+
             // Take ownership of payload to avoid cloning the (potentially large) JSON tree.
             // The event struct remains intact with Value::Null in the payload field,
             // which is fine since we only use metadata fields after this point.
@@ -172,6 +200,12 @@ impl OutboxRelay {
 
             match self.publish_payload(&event.topic, payload).await {
                 Ok(()) => {
+                    // Mark in Redis dedup cache BEFORE the DB update.
+                    // If the DB update fails, the dedup cache prevents re-publishing on next claim.
+                    if let Some(ref redis) = self.redis {
+                        dedup::mark_published(redis, &event.event_id).await;
+                    }
+
                     let update_result = if self.config.delete_on_publish {
                         delete_published(&self.pool, event.id).await
                     } else {

@@ -1,3 +1,4 @@
+pub mod dedup;
 mod metrics;
 mod processed;
 mod relay;
