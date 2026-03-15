@@ -6,7 +6,7 @@ Products, pricing, inventory, categories (ltree hierarchy), and brands.
 
 - Layered: `routes` → `service` (free fns) → `domain` → `repository` (free fns) → DB
 - Rich domain models — all fields are value objects, constructed via `TryFrom<Entity>`
-- Validated DTOs — `ValidCreateProductReq::new(pool, req)` does VO construction + async FK validation (delegates to `repository::validate_fk_references`)
+- Validated DTOs — `ValidCreateProductReq::new(req)` does pure VO construction; FK validation lives in the service layer via `repository::validate_fk_references`
 - Typed IDs via `shared::valid_id!`: `ProductId`, `SkuId`, `ProductImageId`, `CategoryId`, `BrandId`
 - Name VOs via `shared::validated_name!`: `ProductName(500)`, `CategoryName(255)`, `BrandName(255)`
 - Claims-based JWT auth, no gRPC (ADR-008)

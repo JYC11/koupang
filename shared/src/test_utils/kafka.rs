@@ -15,14 +15,33 @@ static SHARED_KAFKA: OnceCell<SharedKafkaContainer> = OnceCell::const_new();
 
 impl SharedKafkaContainer {
     async fn init() -> Self {
-        let container = Kafka::default().start().await.unwrap();
-        let host = container.get_host().await.unwrap();
-        let port = container.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
-        let bootstrap_servers = format!("{host}:{port}");
-        Self {
-            _container: container,
-            bootstrap_servers,
+        // The apache/kafka-native (GraalVM) image occasionally fails with
+        // WaitLog(EndOfStream) when the Docker log stream closes before the
+        // "Kafka Server started" message is matched. This is an intermittent
+        // Docker log-streaming issue, not a Kafka startup failure. Retry up
+        // to 3 times with a short delay between attempts.
+        let mut last_err = String::new();
+        for attempt in 1..=3 {
+            match Kafka::default().start().await {
+                Ok(container) => {
+                    let host = container.get_host().await.unwrap();
+                    let port = container.get_host_port_ipv4(KAFKA_PORT).await.unwrap();
+                    let bootstrap_servers = format!("{host}:{port}");
+                    return Self {
+                        _container: container,
+                        bootstrap_servers,
+                    };
+                }
+                Err(e) => {
+                    last_err = format!("{e}");
+                    eprintln!(
+                        "[TestKafka] attempt {attempt}/3 failed: {last_err}, retrying..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
         }
+        panic!("[TestKafka] failed to start Kafka container after 3 attempts: {last_err}");
     }
 }
 

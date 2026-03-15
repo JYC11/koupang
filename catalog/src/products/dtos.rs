@@ -1,14 +1,11 @@
 use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
 use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
-use crate::products::repository;
-use crate::products::repository::validate_fk_references;
 use crate::products::value_objects::{
     Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use shared::db::PgPool;
 use shared::db::pagination_support::{PaginationDirection, PaginationParams, PaginationQuery};
 use shared::dto_helpers::{fmt_datetime, fmt_datetime_opt, fmt_id};
 use shared::errors::AppError;
@@ -268,16 +265,12 @@ pub struct ValidCreateProductReq {
 }
 
 impl ValidCreateProductReq {
-    pub async fn new(pool: &PgPool, req: CreateProductReq) -> Result<Self, AppError> {
+    pub fn new(req: CreateProductReq) -> Result<Self, AppError> {
         let name = ProductName::new(&req.name)?;
         let slug = match req.slug {
             Some(s) => Slug::new(&s)?,
             None => Slug::from_name(name.as_str())?,
         };
-
-        let category_id = req.category_id.map(CategoryId::new);
-        let brand_id = req.brand_id.map(BrandId::new);
-        validate_fk_references(pool, category_id, brand_id).await?;
 
         Ok(Self {
             name,
@@ -288,8 +281,8 @@ impl ValidCreateProductReq {
                 Some(c) => Currency::new(&c)?,
                 None => Currency::default(),
             },
-            category_id,
-            brand_id,
+            category_id: req.category_id.map(CategoryId::new),
+            brand_id: req.brand_id.map(BrandId::new),
         })
     }
 }
@@ -306,12 +299,8 @@ pub struct ValidUpdateProductReq {
 }
 
 impl ValidUpdateProductReq {
-    pub async fn new(
-        pool: &PgPool,
-        req: UpdateProductReq,
-        existing: &ProductEntity,
-    ) -> Result<Self, AppError> {
-        // Merge: use updated value if present, else keep existing
+    pub fn new(req: UpdateProductReq, existing: &ProductEntity) -> Result<Self, AppError> {
+        // Merge: use updated value if present, else keep existing.
         let effective_category = req
             .category_id
             .map(CategoryId::new)
@@ -320,7 +309,6 @@ impl ValidUpdateProductReq {
             .brand_id
             .map(BrandId::new)
             .or(existing.brand_id.map(BrandId::new));
-        validate_fk_references(pool, effective_category, effective_brand).await?;
         Ok(Self {
             name: req.name.map(|n| ProductName::new(&n)).transpose()?,
             slug: req.slug.map(|s| Slug::new(&s)).transpose()?,

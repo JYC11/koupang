@@ -276,129 +276,145 @@ impl KafkaEventConsumer {
         let mut last_error = String::new();
 
         for attempt in 0..=self.config.max_retries {
-            // Begin transaction
-            let mut tx = match self.pool.begin().await {
-                Ok(tx) => tx,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to begin transaction");
-                    self.metrics.record_db_error(started_at);
-                    return ProcessResult::DbError;
-                }
-            };
-
-            // Idempotency check
-            match is_event_processed(&mut *tx, event_id).await {
-                Ok(true) => {
-                    if let Err(e) = tx.commit().await {
-                        tracing::error!(error = %e, "Failed to commit skip-transaction");
-                        self.metrics.record_db_error(started_at);
-                        return ProcessResult::DbError;
-                    }
-                    tracing::debug!(event_id = %event_id, "Event already processed, skipping");
-                    self.metrics.record_skipped(started_at);
-                    return ProcessResult::Skipped;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::error!(error = %e, "Idempotency check failed");
-                    self.metrics.record_db_error(started_at);
-                    return ProcessResult::DbError;
-                }
-            }
-
-            // Call handler
-            match self.handler.handle(envelope, &mut tx).await {
-                Ok(()) => {
-                    // Mark processed in same transaction
-                    if let Err(e) =
-                        mark_event_processed(&mut *tx, event_id, &event_type, &source_service).await
-                    {
-                        tracing::error!(error = %e, "Failed to mark event processed");
-                        self.metrics.record_db_error(started_at);
-                        return ProcessResult::DbError;
-                    }
-                    if let Err(e) = tx.commit().await {
-                        tracing::error!(error = %e, "Failed to commit transaction");
-                        self.metrics.record_db_error(started_at);
-                        return ProcessResult::DbError;
-                    }
-                    tracing::debug!(
-                        event_id = %event_id,
-                        event_type = %event_type,
-                        "Event processed successfully"
-                    );
+            match self
+                .try_process_once(envelope, &event_type, &source_service)
+                .await
+            {
+                AttemptResult::Committed => {
                     self.metrics.record_success(started_at);
                     return ProcessResult::Success;
                 }
-                Err(HandlerError::Permanent(e)) => {
-                    last_error = e.to_string();
-                    drop(tx); // ROLLBACK
-                    tracing::warn!(
-                        event_id = %event_id,
-                        error = %last_error,
-                        "Permanent handler error, sending to DLQ"
-                    );
-                    let result = self
-                        .publish_envelope_to_dlq(topic, envelope, &last_error, 0)
-                        .await;
-                    match result {
-                        ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
-                        _ => self.metrics.record_dlq_failed(started_at),
-                    }
-                    return result;
+                AttemptResult::AlreadyProcessed => {
+                    self.metrics.record_skipped(started_at);
+                    return ProcessResult::Skipped;
                 }
-                Err(HandlerError::Transient(e)) => {
-                    last_error = e.to_string();
-                    drop(tx); // ROLLBACK
-
+                AttemptResult::DbError => {
+                    self.metrics.record_db_error(started_at);
+                    return ProcessResult::DbError;
+                }
+                AttemptResult::PermanentFailure(err) => {
+                    tracing::warn!(event_id = %event_id, error = %err, "Permanent error, sending to DLQ");
+                    return self
+                        .send_to_dlq_with_metrics(topic, envelope, &err, 0, started_at)
+                        .await;
+                }
+                AttemptResult::TransientFailure(err) => {
+                    last_error = err;
                     if attempt >= self.config.max_retries {
-                        break; // Exhausted retries → DLQ below
+                        break;
                     }
-
                     self.metrics.record_retry();
                     tracing::warn!(
-                        event_id = %event_id,
-                        error = %last_error,
-                        attempt = attempt + 1,
-                        max_retries = self.config.max_retries,
+                        event_id = %event_id, error = %last_error,
+                        attempt = attempt + 1, max_retries = self.config.max_retries,
                         "Transient handler error, retrying"
                     );
-
-                    // Backoff between retries, checking shutdown
-                    let delay = self.calculate_backoff(attempt);
-                    tokio::select! {
-                        biased;
-                        _ = shutdown.cancelled() => {
-                            tracing::info!("Shutdown during retry backoff, sending to DLQ");
-                            let result = self
-                                .publish_envelope_to_dlq(
-                                    topic,
-                                    envelope,
-                                    &format!("shutdown during backoff: {last_error}"),
-                                    attempt + 1,
-                                )
-                                .await;
-                            match result {
-                                ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
-                                _ => self.metrics.record_dlq_failed(started_at),
-                            }
-                            return result;
-                        }
-                        _ = tokio::time::sleep(delay) => {}
+                    if self.backoff_or_shutdown(attempt, shutdown).await {
+                        return self
+                            .send_to_dlq_with_metrics(
+                                topic,
+                                envelope,
+                                &format!("shutdown during backoff: {last_error}"),
+                                attempt + 1,
+                                started_at,
+                            )
+                            .await;
                     }
                 }
             }
         }
 
-        // Exhausted all retries
+        // Exhausted all retries.
         tracing::warn!(
-            event_id = %envelope.metadata.event_id,
+            event_id = %event_id,
             retries = self.config.max_retries,
             error = %last_error,
             "Handler exhausted retries, sending to DLQ"
         );
+        self.send_to_dlq_with_metrics(
+            topic,
+            envelope,
+            &last_error,
+            self.config.max_retries,
+            started_at,
+        )
+        .await
+    }
+
+    /// Single processing attempt: begin tx → idempotency check → handler → commit.
+    async fn try_process_once(
+        &self,
+        envelope: &EventEnvelope,
+        event_type: &str,
+        source_service: &str,
+    ) -> AttemptResult {
+        let event_id = envelope.metadata.event_id;
+
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to begin transaction");
+                return AttemptResult::DbError;
+            }
+        };
+
+        match is_event_processed(&mut *tx, event_id).await {
+            Ok(true) => {
+                if let Err(e) = tx.commit().await {
+                    tracing::error!(error = %e, "Failed to commit skip-transaction");
+                    return AttemptResult::DbError;
+                }
+                tracing::debug!(event_id = %event_id, "Event already processed, skipping");
+                return AttemptResult::AlreadyProcessed;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "Idempotency check failed");
+                return AttemptResult::DbError;
+            }
+        }
+
+        match self.handler.handle(envelope, &mut tx).await {
+            Ok(()) => {
+                if let Err(e) =
+                    mark_event_processed(&mut *tx, event_id, event_type, source_service).await
+                {
+                    tracing::error!(error = %e, "Failed to mark event processed");
+                    return AttemptResult::DbError;
+                }
+                if let Err(e) = tx.commit().await {
+                    tracing::error!(error = %e, "Failed to commit transaction");
+                    return AttemptResult::DbError;
+                }
+                tracing::debug!(
+                    event_id = %event_id,
+                    event_type = %event_type,
+                    "Event processed successfully"
+                );
+                AttemptResult::Committed
+            }
+            Err(HandlerError::Permanent(e)) => {
+                drop(tx);
+                AttemptResult::PermanentFailure(e.to_string())
+            }
+            Err(HandlerError::Transient(e)) => {
+                drop(tx);
+                AttemptResult::TransientFailure(e.to_string())
+            }
+        }
+    }
+
+    /// Publish to DLQ and record the appropriate metric.
+    async fn send_to_dlq_with_metrics(
+        &self,
+        topic: &str,
+        envelope: &EventEnvelope,
+        error: &str,
+        retry_count: u32,
+        started_at: Instant,
+    ) -> ProcessResult {
         let result = self
-            .publish_envelope_to_dlq(topic, envelope, &last_error, self.config.max_retries)
+            .publish_envelope_to_dlq(topic, envelope, error, retry_count)
             .await;
         match result {
             ProcessResult::SentToDlq => self.metrics.record_dlq(started_at),
@@ -540,6 +556,19 @@ impl KafkaEventConsumer {
         }
     }
 
+    /// Wait for backoff delay, returning `true` if shutdown was requested.
+    async fn backoff_or_shutdown(&self, attempt: u32, shutdown: &CancellationToken) -> bool {
+        let delay = self.calculate_backoff(attempt);
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!("Shutdown during retry backoff, sending to DLQ");
+                true
+            }
+            _ = tokio::time::sleep(delay) => false,
+        }
+    }
+
     /// Exponential backoff: base × 2^attempt, capped at retry_max_delay.
     fn calculate_backoff(&self, attempt: u32) -> Duration {
         let base_ms = self.config.retry_base_delay.as_millis() as u64;
@@ -596,6 +625,20 @@ enum ProcessResult {
     DlqFailed,
     /// Database error — do NOT commit offset.
     DbError,
+}
+
+/// Result of a single processing attempt within the retry loop.
+enum AttemptResult {
+    /// Handler succeeded, event committed as processed.
+    Committed,
+    /// Event was already processed (idempotency skip).
+    AlreadyProcessed,
+    /// Database error (begin, idempotency check, mark, or commit).
+    DbError,
+    /// Handler returned a permanent error — skip retries, go to DLQ.
+    PermanentFailure(String),
+    /// Handler returned a transient error — may retry.
+    TransientFailure(String),
 }
 
 // ── Unit tests ──────────────────────────────────────────────────────

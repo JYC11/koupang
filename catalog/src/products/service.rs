@@ -36,7 +36,9 @@ pub async fn create_product(
     current_user: &CurrentUser,
     req: CreateProductReq,
 ) -> Result<ProductRes, AppError> {
-    let validated = ValidCreateProductReq::new(&state.pool, req).await?;
+    let validated = ValidCreateProductReq::new(req)?;
+    repository::validate_fk_references(&state.pool, validated.category_id, validated.brand_id)
+        .await?;
     let seller_id = current_user.id;
 
     let product_id = with_transaction(&state.pool, |tx| {
@@ -126,7 +128,9 @@ pub async fn update_product(
     let product = repository::get_product_by_id(&state.pool, product_id).await?;
     require_access(current_user, &product.seller_id)?;
 
-    let validated = ValidUpdateProductReq::new(&state.pool, req, &product).await?;
+    let validated = ValidUpdateProductReq::new(req, &product)?;
+    repository::validate_fk_references(&state.pool, validated.category_id, validated.brand_id)
+        .await?;
 
     with_transaction(&state.pool, |tx| {
         Box::pin(async move {
