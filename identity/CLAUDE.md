@@ -47,13 +47,14 @@ Tests: `tests/users/{repository,service,router,grpc_service}_test.rs` + `tests/c
 | VO | Rules |
 |----|-------|
 | `Email` | RFC 5322 simplified regex, max 254, lowercased |
-| `Password` | Min 8, requires upper + lower + digit + special |
+| `Password` | Min 8, max 128, requires upper + lower + digit + special (raw input validation) |
+| `HashedPassword` | Wraps argon2 hash string; type-safe distinction from raw passwords |
 | `Phone` | E.164-ish: `+{cc}-{digits}`, 7-15 total digits |
 | `Username` | 3-30 chars, `[a-zA-Z0-9_-]` |
 
 ## Key Patterns
 
-- **Passwords:** Argon2 hashing
+- **Passwords:** Argon2 hashing; `hash_password()` returns `HashedPassword`; `verify_password()` takes `&HashedPassword`; repository functions take `&HashedPassword` (not `&str`)
 - **Tokens:** 32-byte random hex, 24h expiry (password reset)
 - **Caching:** Redis user cache, 5-min TTL, key `user:{uuid}`, evicted on update/delete
 - **Transactions:** All writes use `with_transaction()` from shared
@@ -66,7 +67,7 @@ Tests: `tests/users/{repository,service,router,grpc_service}_test.rs` + `tests/c
 
 ## Tests
 
-33 unit + 49 integration = 82 tests. `make test SERVICE=identity`
+35 unit + 49 integration = 84 tests. `make test SERVICE=identity`
 
 Test layers follow `/test-guide` skill:
 - Repository (10): constraint violations, nonexistent entity errors, default values, SQL time filtering

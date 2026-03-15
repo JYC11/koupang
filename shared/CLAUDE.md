@@ -19,9 +19,9 @@ shared/src/
 │   ├── guards.rs              # require_access(), require_admin()
 │   └── role.rs                # Role enum (Buyer, Seller, Admin)
 ├── db/
-│   ├── mod.rs                 # init_db(), PgPool, PgExec, PgConnection
-│   ├── transaction_support.rs # TxContext, with_transaction(), with_nested_transaction()
-│   └── pagination_support.rs  # keyset_paginate(), get_cursors(), PaginationParams (Default), PaginationRes, HasId
+│   ├── mod.rs                 # init_db() → Result, PgPool, PgExec, PgConnection
+│   ├── transaction_support.rs # TxContext, with_transaction(), with_nested_transaction() — logs rollback errors
+│   └── pagination_support.rs  # keyset_paginate(), get_cursors(), PaginationParams (Default), PaginationRes, PaginatedResponse, HasId
 ├── config/
 │   ├── db_config.rs           # DbConfig::new(env_key)
 │   ├── auth_config.rs         # AuthConfig::new(), ::for_tests()
@@ -45,9 +45,10 @@ shared/src/
 │   ├── types.rs               # OutboxEvent, OutboxInsert, OutboxStatus, FailureEscalation trait
 │   ├── repository.rs          # insert, claim_batch, mark_published, delete_published, mark_retry_or_failed, release_stale_locks, cleanup
 │   ├── processed.rs           # is_event_processed, mark_event_processed, cleanup_processed_events
-│   ├── relay.rs               # OutboxRelay — background task: claim → publish → ack
+│   ├── relay.rs               # OutboxRelay — background task: claim → publish → ack; optional Redis dedup
+│   ├── dedup.rs               # Redis dedup cache — is_published(), mark_published() for relay duplicate prevention
 │   └── metrics.rs             # collect_outbox_metrics → OutboxMetrics
-├── cache/mod.rs               # init_redis(), init_optional_redis(), RedisCache (generic JSON cache)
+├── cache/mod.rs               # init_redis() → Result, init_optional_redis(), RedisCache (generic JSON cache)
 ├── email/mod.rs               # EmailService trait, EmailMessage, MockEmailService
 ├── grpc/mod.rs                # grpc::identity (generated protobuf)
 └── test_utils/                # behind `test-utils` feature
@@ -64,9 +65,9 @@ shared/src/
 | Module | Key exports |
 |--------|-------------|
 | `server` | `ServiceBuilder::new(name).http_port_env().db_url_env().with_redis().run(build_app)` — composable bootstrap; `.run_with_grpc()` for gRPC sidecar; `Infra { db, redis }` passed to closures |
-| `db` | `init_db()`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
-| `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` |
-| `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `HasId` trait |
+| `db` | `init_db() → Result`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
+| `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors |
+| `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `PaginatedResponse<T>` (Serialize+Deserialize), `HasId` trait |
 | `auth::jwt` | `jwt::generate_access_token(&config, ...)`, `jwt::validate_access_token(&config, token)`, `CurrentUser { id, role }` (axum extractor), `AccessTokenClaims` (axum extractor) |
 | `auth::middleware` | `AuthMiddleware::new(auth_config, user_lookup)` (identity), `::new_claims_based(auth_config)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
@@ -76,7 +77,8 @@ shared/src/
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
-| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay`, `RelayHeartbeat` |
+| `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` (`.with_redis()` for dedup), `RelayHeartbeat` |
+| `outbox::dedup` | `is_published(conn, event_id)`, `mark_published(conn, event_id)` — Redis-based duplicate publish prevention |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |
 | `outbox::metrics` | `collect_outbox_metrics()` → `OutboxMetrics { pending_count, failed_count, published_count, oldest_pending_age_secs }` |
 

@@ -62,6 +62,7 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 | `Price` | products | Decimal >= 0 |
 | `SkuCode` | products | 2-100 chars, alphanumeric + hyphens/underscores |
 | `StockQuantity` | products | i32 >= 0 |
+| `SearchQuery` | products | trimmed, non-empty, max 200 chars (silently truncated) |
 | `Currency` | products | 3-letter ISO 4217, uppercased (default: USD) |
 | `ProductStatus` | products | Draft, Active, Inactive, Archived (serde: snake_case) |
 | `SkuStatus` | products | Active, Inactive, OutOfStock (serde: snake_case) |
@@ -73,12 +74,16 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 - **Auth:** `AuthMiddleware::new_claims_based(auth_config)` (ADR-008); `require_access()` for owner/admin
 - **Category hierarchy:** Postgres ltree — subtree `<@`, ancestors `@>` (ADR-009)
 - **Soft deletes:** Products/SKUs via `deleted_at`; images hard-deleted; categories/brands hard-deleted with guards
-- **Partial updates:** Dynamic SQL (only provided fields)
-- **FK validation:** `repository::validate_fk_references(pool, category_id, brand_id)` — existence checks + brand-category association; called from validated DTOs
+- **Partial updates:** `QueryBuilder::separated()` pattern — single if-chain per field (no dual-if-chain)
+- **FK validation:** `repository::validate_fk_references(pool, category_id, brand_id)` — existence checks + brand-category association; called from service layer
 - **LEFT JOINs:** Product reads JOIN categories/brands for names/slugs in responses
-- **Keyset pagination:** UUID v7-based cursor pagination via `shared::db::pagination_support`; `ProductFilterQuery` → `(PaginationParams, ProductFilter)` via `into_parts()`; supports `cursor`, `limit` (default 20, max 100), `direction` (forward/backward); returns `next_cursor` + `prev_cursor`
-- **List filters:** `category_id`, `brand_id`, `min_price`, `max_price`, `search` (ILIKE), `status` (seller/me only)
+- **Product detail:** Single query with `LEFT JOIN LATERAL` + `json_agg` for product + SKUs + images (1 round trip, not 3); `ProductDetailRow` entity, `ProductDetailRes::from_row()` for JSON deserialization
+- **Keyset pagination:** UUID v7-based cursor pagination via `shared::db::pagination_support`; used for `list_brands`, `list_root_categories`, `get_children`, `list_categories_for_brand`; `ProductFilterQuery` → `(PaginationParams, ProductFilter)` via `into_parts()`; supports `cursor`, `limit` (default 20, max 100), `direction` (forward/backward); returns `PaginatedResponse` with `next_cursor` + `prev_cursor`
+- **Hard LIMIT safety nets:** `get_subtree` (200), `get_ancestors` (50), `list_skus_by_product` (100), `list_images_by_product` (50) — bounded queries with natural non-ID ordering
+- **Bounds:** Stock delta ±10,000; category max depth 10; search max 200 chars
+- **List filters:** `category_id`, `brand_id`, `min_price`, `max_price`, `search` (`SearchQuery` VO, ILIKE), `status` (seller/me only)
 - **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + `keyset_paginate()` via QueryBuilder
+- **Existence checks:** `has_products`/`has_children` use `SELECT EXISTS(...)` (short-circuits on first match)
 
 ## Redis Caching
 
@@ -97,7 +102,7 @@ Lists are **not cached** (paginated + filtered = poor hit rate).
 
 ## Tests
 
-58 unit + 83 integration = 141 tests. `make test SERVICE=catalog`
+62 unit + 83 integration = 145 tests. `make test SERVICE=catalog`
 
 Test layers follow `/test-guide` skill:
 - Repository (16): internal helpers (has_products, has_children, FK exists, is_brand_in_category), JOIN behavior, ltree paths, soft deletes, stock adjustment SQL, CHECK constraints

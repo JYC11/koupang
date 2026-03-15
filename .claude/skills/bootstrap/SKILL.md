@@ -35,9 +35,9 @@ Use catalog as the reference implementation. Execute these steps in order.
    ```
    Health routes are merged automatically by `ServiceBuilder`.
 
-3. **Create `src/lib.rs`** — define `AppState` (wraps `Arc<Service>` + `Arc<JwtService>`) and `app()` fn
+3. **Create `src/lib.rs`** — define `AppState { pool, cache, auth_config }` and `app()` fn (free functions, no service structs)
 
-4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `domain.rs`, `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`, `errors.rs`
+4. **Create module directory** e.g. `src/orders/` with: `mod.rs`, `routes.rs`, `service.rs`, `domain.rs` (#[allow(dead_code)]), `repository.rs`, `entities.rs`, `dtos.rs`, `value_objects.rs`
 
 5. **Create `errors.rs`** — per-service domain error enum with `From` impl for AppError:
    ```rust
@@ -67,7 +67,7 @@ Use catalog as the reference implementation. Execute these steps in order.
 
 6. **Create first migration**: `make migration SERVICE=<name> NAME=init`
 
-7. **Auth**: use `AuthMiddleware::new_claims_based(jwt_service)` for non-identity services (ADR-008)
+7. **Auth**: use `AuthMiddleware::new_claims_based(auth_config)` for non-identity services (ADR-008)
 
 8. **Kafka topics** (if service publishes events): create topics on startup using `KafkaAdmin::ensure_topics()`, add outbox migration from `.plan/outbox-migration-template.sql`. Follow event naming from ADR-011: `{service}.{entity}.{past_tense_verb}`
 
