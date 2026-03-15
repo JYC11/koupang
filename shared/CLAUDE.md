@@ -14,7 +14,7 @@ shared/src/
 ├── responses.rs               # ok(), success(), created()
 ├── dto_helpers.rs             # fmt_id(), fmt_datetime(), fmt_datetime_opt()
 ├── auth/
-│   ├── jwt.rs                 # JwtService, CurrentUser, AccessTokenClaims, JwtTokens
+│   ├── jwt.rs                 # jwt:: free functions (generate/validate tokens), CurrentUser, AccessTokenClaims, JwtTokens
 │   ├── middleware.rs          # AuthMiddleware (::new for identity, ::new_claims_based for others)
 │   ├── guards.rs              # require_access(), require_admin()
 │   └── role.rs                # Role enum (Buyer, Seller, Admin)
@@ -67,8 +67,8 @@ shared/src/
 | `db` | `init_db()`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
 | `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `HasId` trait |
-| `auth::jwt` | `JwtService::new(AuthConfig)`, `CurrentUser { id, role }` (axum extractor), `AccessTokenClaims` (axum extractor) |
-| `auth::middleware` | `AuthMiddleware::new(jwt, user_lookup)` (identity), `::new_claims_based(jwt)` (other services, ADR-008) |
+| `auth::jwt` | `jwt::generate_access_token(&config, ...)`, `jwt::validate_access_token(&config, token)`, `CurrentUser { id, role }` (axum extractor), `AccessTokenClaims` (axum extractor) |
+| `auth::middleware` | `AuthMiddleware::new(auth_config, user_lookup)` (identity), `::new_claims_based(auth_config)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
 | `auth::role` | `Role` — Buyer, Seller, Admin |
 | `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`), `ConsumerConfig` (`.new(group_id, topics)` / `.from_env()`) |

@@ -1,40 +1,35 @@
-use brands::service::BrandService;
-use categories::service::CategoryService;
-use products::service::CatalogService;
-use shared::auth::jwt::JwtService;
+use shared::cache::RedisCache;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
-use std::sync::Arc;
 
 pub mod brands;
 pub mod categories;
 pub mod common;
 pub mod products;
 
+const PRODUCT_CACHE_TTL: u64 = 300; // 5 minutes
+
 #[derive(Clone)]
 pub struct AppState {
-    pub service: Arc<CatalogService>,
-    pub category_service: Arc<CategoryService>,
-    pub brand_service: Arc<BrandService>,
-    pub jwt_service: Arc<JwtService>,
+    pub pool: PgPool,
+    pub cache: RedisCache,
+    pub auth_config: AuthConfig,
 }
 
 impl AppState {
     pub fn new(pool: PgPool, redis_conn: Option<redis::aio::ConnectionManager>) -> Self {
         Self {
-            service: Arc::new(CatalogService::new(pool.clone(), redis_conn)),
-            category_service: Arc::new(CategoryService::new(pool.clone())),
-            brand_service: Arc::new(BrandService::new(pool)),
-            jwt_service: Arc::new(JwtService::new(AuthConfig::new())),
+            pool,
+            cache: RedisCache::new(redis_conn, PRODUCT_CACHE_TTL),
+            auth_config: AuthConfig::new(),
         }
     }
 
     pub fn new_with_jwt(pool: PgPool, auth_config: AuthConfig) -> Self {
         Self {
-            service: Arc::new(CatalogService::new(pool.clone(), None)),
-            category_service: Arc::new(CategoryService::new(pool.clone())),
-            brand_service: Arc::new(BrandService::new(pool)),
-            jwt_service: Arc::new(JwtService::new(auth_config)),
+            pool,
+            cache: RedisCache::new(None, PRODUCT_CACHE_TTL),
+            auth_config,
         }
     }
 }

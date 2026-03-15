@@ -4,7 +4,7 @@ Products, pricing, inventory, categories (ltree hierarchy), and brands.
 
 ## Architecture
 
-- Layered: `routes` → `service` → `domain` → `repository` → DB
+- Layered: `routes` → `service` (free fns) → `domain` → `repository` (free fns) → DB
 - Rich domain models — all fields are value objects, constructed via `TryFrom<Entity>`
 - Validated DTOs — `ValidCreateProductReq::new(pool, req)` does VO construction + async FK validation (delegates to `repository::validate_fk_references`)
 - Typed IDs via `shared::valid_id!`: `ProductId`, `SkuId`, `ProductImageId`, `CategoryId`, `BrandId`
@@ -15,7 +15,7 @@ Products, pricing, inventory, categories (ltree hierarchy), and brands.
 
 ```
 catalog/src/
-├── main.rs / lib.rs              # AppState { product_service, category_service, brand_service, jwt_service }
+├── main.rs / lib.rs              # AppState { pool, cache, auth_config }
 ├── common/value_objects.rs       # Slug, HttpUrl (shared across modules)
 ├── products/                     # 12 endpoints — domain.rs, dtos.rs, entities.rs, repository.rs, routes.rs, service.rs, value_objects.rs
 ├── categories/                   # 9 endpoints  — same structure as products
@@ -70,7 +70,7 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 ## Key Patterns
 
 - **Money:** `rust_decimal::Decimal` + `NUMERIC(19,4)` (ADR-007)
-- **Auth:** `AuthMiddleware::new_claims_based()` (ADR-008); `require_access()` for owner/admin
+- **Auth:** `AuthMiddleware::new_claims_based(auth_config)` (ADR-008); `require_access()` for owner/admin
 - **Category hierarchy:** Postgres ltree — subtree `<@`, ancestors `@>` (ADR-009)
 - **Soft deletes:** Products/SKUs via `deleted_at`; images hard-deleted; categories/brands hard-deleted with guards
 - **Partial updates:** Dynamic SQL (only provided fields)

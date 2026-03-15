@@ -9,7 +9,8 @@ use axum::{
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::jwt::{AccessTokenClaims, AuthError, CurrentUser, JwtService};
+use crate::auth::jwt::{self, AccessTokenClaims, AuthError, CurrentUser};
+use crate::config::auth_config::AuthConfig;
 use crate::errors::AppError;
 
 #[async_trait]
@@ -19,25 +20,25 @@ pub trait GetCurrentUser: Send + Sync {
 
 #[derive(Clone)]
 pub struct AuthMiddleware {
-    jwt_service: Arc<JwtService>,
+    auth_config: AuthConfig,
     current_user_getter: Option<Arc<dyn GetCurrentUser>>,
 }
 
 impl AuthMiddleware {
     /// Full auth: validates JWT then fetches user from DB via GetCurrentUser.
     /// Used by Identity service which owns the user table.
-    pub fn new(jwt_service: Arc<JwtService>, current_user_getter: Arc<dyn GetCurrentUser>) -> Self {
+    pub fn new(auth_config: AuthConfig, current_user_getter: Arc<dyn GetCurrentUser>) -> Self {
         Self {
-            jwt_service,
+            auth_config,
             current_user_getter: Some(current_user_getter),
         }
     }
 
     /// Claims-based auth: validates JWT and trusts the embedded claims to build CurrentUser.
     /// Used by downstream services (Catalog, Order, etc.) that don't have direct DB access to users.
-    pub fn new_claims_based(jwt_service: Arc<JwtService>) -> Self {
+    pub fn new_claims_based(auth_config: AuthConfig) -> Self {
         Self {
-            jwt_service,
+            auth_config,
             current_user_getter: None,
         }
     }
@@ -53,14 +54,11 @@ impl AuthMiddleware {
         let token = extract_bearer_token(headers)?;
 
         // 2. Validate and decode JWT
-        let claims = self
-            .jwt_service
-            .validate_access_token(token)
-            .map_err(|e| match e {
-                AuthError::TokenExpired => AuthMiddlewareError::TokenExpired,
-                AuthError::InvalidToken => AuthMiddlewareError::InvalidToken,
-                _ => AuthMiddlewareError::InvalidToken,
-            })?;
+        let claims = jwt::validate_access_token(&self.auth_config, token).map_err(|e| match e {
+            AuthError::TokenExpired => AuthMiddlewareError::TokenExpired,
+            AuthError::InvalidToken => AuthMiddlewareError::InvalidToken,
+            _ => AuthMiddlewareError::InvalidToken,
+        })?;
 
         // 3. Build CurrentUser — either from DB or from JWT claims
         let current_user = match &self.current_user_getter {

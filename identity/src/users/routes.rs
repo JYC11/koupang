@@ -12,6 +12,7 @@ use crate::users::dtos::{
     ChangePasswordReq, ForgotPasswordReq, ResetPasswordReq, UserCreateReq, UserLoginReq,
     UserLoginRes, UserRefreshReq, UserRefreshRes, UserRes, UserUpdateReq, VerifyEmailReq,
 };
+use crate::users::service;
 use crate::users::value_objects::UserId;
 use shared::auth::guards::require_access;
 use shared::auth::jwt::{CurrentUser, JwtTokens};
@@ -21,8 +22,8 @@ use shared::responses;
 
 pub fn user_routes(app_state: AppState) -> Router {
     let auth_middleware = AuthMiddleware::new(
-        Arc::new(app_state.service.jwt_service.clone()),
-        app_state.service.clone() as Arc<dyn GetCurrentUser>,
+        app_state.auth_config.clone(),
+        Arc::new(app_state.clone()) as Arc<dyn GetCurrentUser>,
     );
 
     let public_routes = Router::new()
@@ -48,18 +49,18 @@ pub fn user_routes(app_state: AppState) -> Router {
 }
 
 async fn register(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<UserCreateReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state.service.create_user(req).await?;
+    service::create_user_account(&state, req).await?;
     Ok(responses::created("User registered successfully"))
 }
 
 async fn login(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<UserLoginReq>,
 ) -> Result<Json<JwtTokens>, AppError> {
-    let response = app_state.service.login_user(req).await?;
+    let response = service::login_user(&state, req).await?;
     match response {
         UserLoginRes::Success(tokens) => Ok(Json(tokens)),
         UserLoginRes::Failure(_) => {
@@ -69,18 +70,18 @@ async fn login(
 }
 
 async fn refresh_token(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<UserRefreshReq>,
 ) -> Result<Json<UserRefreshRes>, AppError> {
-    let response = app_state.service.generate_refresh_token(req).await?;
+    let response = service::generate_refresh_token(&state, req).await?;
     Ok(Json(response))
 }
 
 async fn verify_email(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<VerifyEmailReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state.service.verify_email(req).await?;
+    service::verify_email(&state, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Email verified successfully",
@@ -88,23 +89,23 @@ async fn verify_email(
 }
 
 async fn get_one(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<Json<UserRes>, AppError> {
     require_access(&current_user, &id)?;
-    let user = app_state.service.get_user(UserId::new(id)).await?;
+    let user = service::get_user(&state, UserId::new(id)).await?;
     Ok(Json(user))
 }
 
 async fn update(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<UserUpdateReq>,
 ) -> Result<impl IntoResponse, AppError> {
     require_access(&current_user, &id)?;
-    app_state.service.update_user(UserId::new(id), req).await?;
+    service::update_user_account(&state, UserId::new(id), req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User updated successfully",
@@ -112,12 +113,12 @@ async fn update(
 }
 
 async fn delete_user(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     require_access(&current_user, &id)?;
-    app_state.service.delete_user(UserId::new(id)).await?;
+    service::delete_user_account(&state, UserId::new(id)).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "User deleted successfully",
@@ -125,14 +126,11 @@ async fn delete_user(
 }
 
 async fn change_password(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     current_user: CurrentUser,
     Json(req): Json<ChangePasswordReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state
-        .service
-        .change_password(UserId::new(current_user.id), req)
-        .await?;
+    service::change_password(&state, UserId::new(current_user.id), req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Password changed successfully",
@@ -140,10 +138,10 @@ async fn change_password(
 }
 
 async fn forgot_password(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<ForgotPasswordReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state.service.forgot_password(req).await?;
+    service::forgot_password(&state, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "If the email exists, a password reset link has been sent",
@@ -151,10 +149,10 @@ async fn forgot_password(
 }
 
 async fn reset_password(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<ResetPasswordReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    app_state.service.reset_password(req).await?;
+    service::reset_password(&state, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Password has been reset successfully",

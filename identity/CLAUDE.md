@@ -4,7 +4,7 @@ Auth, user management, and profile service.
 
 ## Architecture
 
-- Layered: `routes` → `service` → `domain` → `repository` → DB
+- Layered: `routes` → `service` (free fns) → `domain` → `repository` (free fns) → DB
 - All source under `src/users/`; single domain module
 - Rich domain model — `User` with all VO fields, constructed via `TryFrom<UserEntity>`
 - Typed IDs via `shared::valid_id!`: `UserId`, `PasswordTokenId`, `EmailTokenId`
@@ -16,7 +16,7 @@ Auth, user management, and profile service.
 
 ```
 identity/src/
-├── main.rs / lib.rs              # AppState, GetCurrentUser impl, gRPC sidecar
+├── main.rs / lib.rs              # AppState { pool, cache, auth_config, email_service }, GetCurrentUser impl, gRPC sidecar
 └── users/                        # domain.rs, dtos.rs, entities.rs, repository.rs, routes.rs, service.rs, value_objects.rs, grpc_service.rs
 ```
 

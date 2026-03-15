@@ -1,6 +1,5 @@
 use identity::AppState;
 use identity::users::dtos::{UserCreateReq, UserUpdateReq};
-use identity::users::service::UserService;
 use shared::auth::Role;
 use shared::config::auth_config::AuthConfig;
 use shared::db::PgPool;
@@ -22,9 +21,9 @@ pub fn test_auth_config() -> AuthConfig {
     }
 }
 
-pub fn test_user_service(pool: PgPool) -> UserService {
+pub fn test_app_state(pool: PgPool) -> AppState {
     let email_service = Arc::new(MockEmailService::new());
-    UserService::new_with_config(pool, test_auth_config(), email_service, None)
+    AppState::new_with_config(pool, test_auth_config(), email_service, None)
 }
 
 pub async fn verify_user_email_directly(pool: &PgPool, username: &str) {
@@ -33,10 +32,6 @@ pub async fn verify_user_email_directly(pool: &PgPool, username: &str) {
         .execute(pool)
         .await
         .expect("Failed to verify user email directly");
-}
-
-pub fn test_app_state(pool: PgPool) -> AppState {
-    AppState::new_with_service(test_user_service(pool))
 }
 
 pub fn sample_create_req() -> UserCreateReq {
@@ -78,14 +73,14 @@ pub fn sample_update_req() -> UserUpdateReq {
     }
 }
 
-pub async fn test_user_service_with_redis(pool: PgPool) -> (UserService, TestRedis) {
+pub async fn test_app_state_with_redis(pool: PgPool) -> (AppState, TestRedis) {
     let test_redis = TestRedis::start().await;
     let email_service = Arc::new(MockEmailService::new());
-    let service = UserService::new_with_config(
+    let state = AppState::new_with_config(
         pool,
         test_auth_config(),
         email_service,
         Some(test_redis.conn.clone()),
     );
-    (service, test_redis)
+    (state, test_redis)
 }

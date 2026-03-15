@@ -1,10 +1,7 @@
 use catalog::AppState;
-use catalog::brands::service::BrandService;
 use catalog::brands::value_objects::BrandId;
-use catalog::categories::service::CategoryService;
 use catalog::categories::value_objects::CategoryId;
 use catalog::products::dtos::{AddProductImageReq, CreateProductReq, CreateSkuReq};
-use catalog::products::service::CatalogService;
 use rust_decimal::Decimal;
 use shared::db::PgPool;
 use shared::test_utils::auth::test_auth_config;
@@ -18,25 +15,6 @@ pub use shared::test_utils::auth::{
 
 pub async fn test_db() -> TestDb {
     TestDb::start("./migrations").await
-}
-
-pub fn test_catalog_service(pool: PgPool) -> CatalogService {
-    CatalogService::new(pool, None)
-}
-
-pub fn test_catalog_service_with_redis(
-    pool: PgPool,
-    redis_conn: redis::aio::ConnectionManager,
-) -> CatalogService {
-    CatalogService::new(pool, Some(redis_conn))
-}
-
-pub fn test_category_service(pool: PgPool) -> CategoryService {
-    CategoryService::new(pool)
-}
-
-pub fn test_brand_service(pool: PgPool) -> BrandService {
-    BrandService::new(pool)
 }
 
 pub fn test_app_state(pool: PgPool) -> AppState {

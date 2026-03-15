@@ -12,6 +12,7 @@ use crate::products::dtos::{
     AddProductImageReq, CreateProductReq, CreateSkuReq, ProductDetailRes, ProductFilterQuery,
     ProductImageRes, ProductListRes, ProductRes, SkuRes, UpdateProductReq, UpdateSkuReq,
 };
+use crate::products::service;
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
@@ -20,7 +21,7 @@ use shared::errors::AppError;
 use shared::responses;
 
 pub fn product_routes(app_state: AppState) -> Router {
-    let auth_middleware = AuthMiddleware::new_claims_based(app_state.jwt_service.clone());
+    let auth_middleware = AuthMiddleware::new_claims_based(app_state.auth_config.clone());
 
     let public_routes = Router::new()
         .route("/", get(list_active_products))
@@ -54,68 +55,59 @@ pub fn product_routes(app_state: AppState) -> Router {
 // ── Product handlers ────────────────────────────────────────
 
 async fn list_active_products(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Query(query): Query<ProductFilterQuery>,
 ) -> Result<Json<PaginatedResponse<ProductListRes>>, AppError> {
     let (params, mut filter) = query.into_parts();
     filter.status = None; // public endpoint always filters to active
-    let result = app_state
-        .service
-        .list_active_products(params, filter)
-        .await?;
+    let result = service::list_active_products(&state, params, filter).await?;
     Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn get_product_detail(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProductDetailRes>, AppError> {
     let id = ProductId::new(id);
-    let detail = app_state.service.get_product_detail(id).await?;
+    let detail = service::get_product_detail(&state, id).await?;
     Ok(Json(detail))
 }
 
 async fn get_product_by_slug(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Json<ProductRes>, AppError> {
-    let product = app_state.service.get_product_by_slug(&slug).await?;
+    let product = service::get_product_by_slug(&state, &slug).await?;
     Ok(Json(product))
 }
 
 async fn create_product(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     current_user: CurrentUser,
     Json(req): Json<CreateProductReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    let product = app_state.service.create_product(&current_user, req).await?;
+    let product = service::create_product(&state, &current_user, req).await?;
     Ok(responses::ok(product))
 }
 
 async fn list_my_products(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Query(query): Query<ProductFilterQuery>,
     current_user: CurrentUser,
 ) -> Result<Json<PaginatedResponse<ProductListRes>>, AppError> {
     let (params, filter) = query.into_parts();
-    let result = app_state
-        .service
-        .list_products_by_seller(current_user.id, params, filter)
-        .await?;
+    let result = service::list_products_by_seller(&state, current_user.id, params, filter).await?;
     Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn update_product(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<UpdateProductReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let id = ProductId::new(id);
-    app_state
-        .service
-        .update_product(&current_user, id, req)
-        .await?;
+    service::update_product(&state, &current_user, id, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Product updated successfully",
@@ -123,12 +115,12 @@ async fn update_product(
 }
 
 async fn delete_product(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let id = ProductId::new(id);
-    app_state.service.delete_product(&current_user, id).await?;
+    service::delete_product(&state, &current_user, id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Product deleted successfully",
@@ -138,39 +130,33 @@ async fn delete_product(
 // ── SKU handlers ────────────────────────────────────────────
 
 async fn list_skus(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(product_id): Path<Uuid>,
 ) -> Result<Json<Vec<SkuRes>>, AppError> {
     let product_id = ProductId::new(product_id);
-    let skus = app_state.service.list_skus(product_id).await?;
+    let skus = service::list_skus(&state, product_id).await?;
     Ok(Json(skus))
 }
 
 async fn create_sku(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(product_id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<CreateSkuReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let product_id = ProductId::new(product_id);
-    let sku = app_state
-        .service
-        .create_sku(&current_user, product_id, req)
-        .await?;
+    let sku = service::create_sku(&state, &current_user, product_id, req).await?;
     Ok(responses::ok(sku))
 }
 
 async fn update_sku(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(sku_id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<UpdateSkuReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let sku_id = SkuId::new(sku_id);
-    app_state
-        .service
-        .update_sku(&current_user, sku_id, req)
-        .await?;
+    service::update_sku(&state, &current_user, sku_id, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "SKU updated successfully",
@@ -178,12 +164,12 @@ async fn update_sku(
 }
 
 async fn delete_sku(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(sku_id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let sku_id = SkuId::new(sku_id);
-    app_state.service.delete_sku(&current_user, sku_id).await?;
+    service::delete_sku(&state, &current_user, sku_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "SKU deleted successfully",
@@ -196,16 +182,13 @@ pub struct AdjustStockReq {
 }
 
 async fn adjust_stock(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(sku_id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<AdjustStockReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let sku_id = SkuId::new(sku_id);
-    app_state
-        .service
-        .adjust_stock(&current_user, sku_id, req.delta)
-        .await?;
+    service::adjust_stock(&state, &current_user, sku_id, req.delta).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Stock adjusted successfully",
@@ -215,39 +198,33 @@ async fn adjust_stock(
 // ── Image handlers ──────────────────────────────────────────
 
 async fn list_images(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(product_id): Path<Uuid>,
 ) -> Result<Json<Vec<ProductImageRes>>, AppError> {
     let product_id = ProductId::new(product_id);
-    let images = app_state.service.list_images(product_id).await?;
+    let images = service::list_images(&state, product_id).await?;
     Ok(Json(images))
 }
 
 async fn add_image(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(product_id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<AddProductImageReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let product_id = ProductId::new(product_id);
-    let image = app_state
-        .service
-        .add_image(&current_user, product_id, req)
-        .await?;
+    let image = service::add_image(&state, &current_user, product_id, req).await?;
     Ok(responses::ok(image))
 }
 
 async fn delete_image(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path((product_id, image_id)): Path<(Uuid, Uuid)>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let product_id = ProductId::new(product_id);
     let image_id = ProductImageId::new(image_id);
-    app_state
-        .service
-        .delete_image(&current_user, product_id, image_id)
-        .await?;
+    service::delete_image(&state, &current_user, product_id, image_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Image deleted successfully",

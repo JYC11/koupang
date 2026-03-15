@@ -1,5 +1,5 @@
 use crate::auth::Role;
-use crate::auth::jwt::{CurrentUser, JwtService};
+use crate::auth::jwt::{self, CurrentUser};
 use crate::config::auth_config::AuthConfig;
 use uuid::Uuid;
 
@@ -13,10 +13,8 @@ pub fn test_auth_config() -> AuthConfig {
 }
 
 pub fn test_token(user: &CurrentUser) -> String {
-    let jwt_service = JwtService::new(test_auth_config());
-    jwt_service
-        .generate_access_token(&user.id, "testuser", user.role.clone())
-        .unwrap()
+    let config = test_auth_config();
+    jwt::generate_access_token(&config, &user.id, "testuser", user.role.clone()).unwrap()
 }
 
 pub fn seller_user() -> CurrentUser {

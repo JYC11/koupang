@@ -5,8 +5,10 @@ use crate::common::{
 };
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use catalog::AppState;
 use catalog::app;
 use catalog::products::dtos::{CreateProductReq, ProductDetailRes, UpdateProductReq};
+use catalog::products::service as product_service;
 use catalog::products::value_objects::{ProductId, ProductStatus};
 use shared::auth::jwt::CurrentUser;
 use shared::test_utils::http::{
@@ -534,31 +536,12 @@ async fn create_n_active_products(pool: &shared::db::PgPool, n: usize) -> (Curre
     let state = test_app_state(pool.clone());
     let user = seller();
     let token = test_token(&user);
-    let service = &state.service;
 
     for i in 0..n {
         let mut req = sample_create_product_req();
         req.name = format!("Product {}", i);
         req.slug = Some(format!("product-{}", i));
-        let product = service.create_product(&user, req).await.unwrap();
-        let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
-        service
-            .update_product(
-                &user,
-                product_id,
-                UpdateProductReq {
-                    name: None,
-                    slug: None,
-                    description: None,
-                    base_price: None,
-                    currency: None,
-                    category_id: None,
-                    brand_id: None,
-                    status: Some(ProductStatus::Active),
-                },
-            )
-            .await
-            .unwrap();
+        create_active_product(&state, &user, req).await;
     }
     (user, token)
 }
@@ -595,35 +578,13 @@ async fn pagination_includes_image_url() {
     let db = test_db().await;
     let state = test_app_state(db.pool.clone());
     let user = seller();
-    let service = &state.service;
 
     // Create product and activate it
-    let product = service
-        .create_product(&user, sample_create_product_req())
-        .await
-        .unwrap();
-    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
-    service
-        .update_product(
-            &user,
-            product_id,
-            UpdateProductReq {
-                name: None,
-                slug: None,
-                description: None,
-                base_price: None,
-                currency: None,
-                category_id: None,
-                brand_id: None,
-                status: Some(ProductStatus::Active),
-            },
-        )
-        .await
-        .unwrap();
+    let product_id_str = create_active_product(&state, &user, sample_create_product_req()).await;
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product_id_str).unwrap());
 
     // Add an image
-    service
-        .add_image(&user, product_id, sample_add_image_req())
+    product_service::add_image(&state, &user, product_id, sample_add_image_req())
         .await
         .unwrap();
 
@@ -654,29 +615,31 @@ async fn pagination_includes_image_url() {
 /// Helper: create a product with specific attributes and activate it.
 /// Returns the product id as string.
 async fn create_active_product(
-    service: &catalog::products::service::CatalogService,
+    state: &AppState,
     user: &CurrentUser,
     req: CreateProductReq,
 ) -> String {
-    let product = service.create_product(user, req).await.unwrap();
-    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
-    service
-        .update_product(
-            user,
-            product_id,
-            UpdateProductReq {
-                name: None,
-                slug: None,
-                description: None,
-                base_price: None,
-                currency: None,
-                category_id: None,
-                brand_id: None,
-                status: Some(ProductStatus::Active),
-            },
-        )
+    let product = product_service::create_product(state, user, req)
         .await
         .unwrap();
+    let product_id = ProductId::new(uuid::Uuid::parse_str(&product.id).unwrap());
+    product_service::update_product(
+        state,
+        user,
+        product_id,
+        UpdateProductReq {
+            name: None,
+            slug: None,
+            description: None,
+            base_price: None,
+            currency: None,
+            category_id: None,
+            brand_id: None,
+            status: Some(ProductStatus::Active),
+        },
+    )
+    .await
+    .unwrap();
     product.id
 }
 
@@ -685,13 +648,12 @@ async fn filter_by_category() {
     let db = test_db().await;
     let state = test_app_state(db.pool.clone());
     let user = seller();
-    let service = &state.service;
 
     let cat_a = create_test_category_named(&db.pool, "Phones").await;
     let cat_b = create_test_category_named(&db.pool, "Laptops").await;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Phone One".into(),
@@ -706,7 +668,7 @@ async fn filter_by_category() {
     .await;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Laptop One".into(),
@@ -744,7 +706,6 @@ async fn filter_by_brand() {
     let db = test_db().await;
     let state = test_app_state(db.pool.clone());
     let user = seller();
-    let service = &state.service;
 
     let cat = create_test_category_named(&db.pool, "Electronics").await;
     let brand_a = create_test_brand_named(&db.pool, "BrandAlpha").await;
@@ -753,7 +714,7 @@ async fn filter_by_brand() {
     associate_brand_category(&db.pool, brand_b, cat).await;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Alpha Widget".into(),
@@ -768,7 +729,7 @@ async fn filter_by_brand() {
     .await;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Beta Widget".into(),
@@ -806,12 +767,11 @@ async fn filter_by_price_range() {
     let db = test_db().await;
     let state = test_app_state(db.pool.clone());
     let user = seller();
-    let service = &state.service;
 
     // Create products at different prices: 5.00, 15.00, 25.00
     for (i, price) in [(500i64, 2u32), (1500, 2), (2500, 2)].iter().enumerate() {
         create_active_product(
-            service,
+            &state,
             &user,
             CreateProductReq {
                 name: format!("Price Product {}", i),
@@ -850,10 +810,9 @@ async fn filter_by_search() {
     let db = test_db().await;
     let state = test_app_state(db.pool.clone());
     let user = seller();
-    let service = &state.service;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Blue Sneaker".into(),
@@ -868,7 +827,7 @@ async fn filter_by_search() {
     .await;
 
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Red Jacket".into(),
@@ -907,28 +866,27 @@ async fn filter_by_status_seller_me() {
     let state = test_app_state(db.pool.clone());
     let user = seller();
     let token = test_token(&user);
-    let service = &state.service;
 
     // Create a draft product (default status)
-    service
-        .create_product(
-            &user,
-            CreateProductReq {
-                name: "Draft Product".into(),
-                slug: Some("draft-product".into()),
-                description: None,
-                base_price: rust_decimal::Decimal::new(1000, 2),
-                currency: None,
-                category_id: None,
-                brand_id: None,
-            },
-        )
-        .await
-        .unwrap();
+    product_service::create_product(
+        &state,
+        &user,
+        CreateProductReq {
+            name: "Draft Product".into(),
+            slug: Some("draft-product".into()),
+            description: None,
+            base_price: rust_decimal::Decimal::new(1000, 2),
+            currency: None,
+            category_id: None,
+            brand_id: None,
+        },
+    )
+    .await
+    .unwrap();
 
     // Create an active product
     create_active_product(
-        service,
+        &state,
         &user,
         CreateProductReq {
             name: "Active Product".into(),

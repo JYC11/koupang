@@ -28,7 +28,7 @@
 | --- | ----------------------------- | --------------------------------------------------- |
 | 001 | Cargo workspace per service   | Single `cargo build`, shared deps                   |
 | 002 | UUID v7 primary keys          | Time-ordered, good B-tree locality                  |
-| 003 | Layered architecture          | routes → service → domain → repository              |
+| 003 | Layered architecture          | routes → service (free fns) → domain → repository   |
 | 004 | Testcontainers over mocks     | Real Postgres 18 / Redis in tests, single-threaded  |
 | 005 | JWT access + refresh tokens   | Stateless access tokens, no DB lookup               |
 | 006 | Email trait with mock         | Decoupled from provider, `MockEmailService` for dev |
@@ -50,10 +50,11 @@
 
 ```rust
 use shared::server::{ServiceBuilder, Infra, GrpcConfig};
-use shared::auth::jwt::{JwtService, CurrentUser};
-use shared::auth::middleware::AuthMiddleware;   // ::new() or ::new_claims_based()
+use shared::auth::jwt::{self, CurrentUser};     // jwt:: free functions (generate_access_token, validate_access_token, etc.)
+use shared::auth::middleware::AuthMiddleware;   // ::new(auth_config, getter) or ::new_claims_based(auth_config)
 use shared::auth::guards::{require_access, require_admin};
 use shared::auth::Role;                         // Buyer, Seller, Admin
+use shared::config::auth_config::AuthConfig;    // passed to jwt:: functions and AuthMiddleware
 use shared::db::{PgPool, PgExec, PgConnection};
 use shared::db::transaction_support::{with_transaction, TxContext};
 use shared::errors::AppError;                   // NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest

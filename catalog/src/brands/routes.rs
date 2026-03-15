@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::brands::dtos::{AssociateCategoryReq, BrandRes, CreateBrandReq, UpdateBrandReq};
+use crate::brands::service;
 use crate::brands::value_objects::BrandId;
 use crate::categories::dtos::CategoryRes;
 use crate::categories::value_objects::CategoryId;
@@ -17,7 +18,7 @@ use shared::errors::AppError;
 use shared::responses;
 
 pub fn brand_routes(app_state: AppState) -> Router {
-    let auth_middleware = AuthMiddleware::new_claims_based(app_state.jwt_service.clone());
+    let auth_middleware = AuthMiddleware::new_claims_based(app_state.auth_config.clone());
 
     let public_routes = Router::new()
         .route("/", get(list_brands))
@@ -45,51 +46,45 @@ pub fn brand_routes(app_state: AppState) -> Router {
 
 // ── Handlers ───────────────────────────────────────────────
 
-async fn list_brands(State(app_state): State<AppState>) -> Result<Json<Vec<BrandRes>>, AppError> {
-    let brands = app_state.brand_service.list_brands().await?;
+async fn list_brands(State(state): State<AppState>) -> Result<Json<Vec<BrandRes>>, AppError> {
+    let brands = service::list_brands(&state).await?;
     Ok(Json(brands))
 }
 
 async fn get_brand(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<BrandRes>, AppError> {
     let id = BrandId::new(id);
-    let brand = app_state.brand_service.get_brand(id).await?;
+    let brand = service::get_brand(&state, id).await?;
     Ok(Json(brand))
 }
 
 async fn get_brand_by_slug(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Json<BrandRes>, AppError> {
-    let brand = app_state.brand_service.get_brand_by_slug(&slug).await?;
+    let brand = service::get_brand_by_slug(&state, &slug).await?;
     Ok(Json(brand))
 }
 
 async fn create_brand(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     current_user: CurrentUser,
     Json(req): Json<CreateBrandReq>,
 ) -> Result<impl IntoResponse, AppError> {
-    let brand = app_state
-        .brand_service
-        .create_brand(&current_user, req)
-        .await?;
+    let brand = service::create_brand(&state, &current_user, req).await?;
     Ok(responses::ok(brand))
 }
 
 async fn update_brand(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<UpdateBrandReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let id = BrandId::new(id);
-    app_state
-        .brand_service
-        .update_brand(&current_user, id, req)
-        .await?;
+    service::update_brand(&state, &current_user, id, req).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Brand updated successfully",
@@ -97,15 +92,12 @@ async fn update_brand(
 }
 
 async fn delete_brand(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let id = BrandId::new(id);
-    app_state
-        .brand_service
-        .delete_brand(&current_user, id)
-        .await?;
+    service::delete_brand(&state, &current_user, id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Brand deleted successfully",
@@ -115,29 +107,23 @@ async fn delete_brand(
 // ── Brand-Category handlers ────────────────────────────────
 
 async fn list_categories_for_brand(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<CategoryRes>>, AppError> {
     let id = BrandId::new(id);
-    let categories = app_state
-        .brand_service
-        .list_categories_for_brand(id)
-        .await?;
+    let categories = service::list_categories_for_brand(&state, id).await?;
     Ok(Json(categories))
 }
 
 async fn associate_category(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
     current_user: CurrentUser,
     Json(req): Json<AssociateCategoryReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let id = BrandId::new(id);
     let category_id = CategoryId::new(req.category_id);
-    app_state
-        .brand_service
-        .associate_category(&current_user, id, category_id)
-        .await?;
+    service::associate_category(&state, &current_user, id, category_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Category associated with brand",
@@ -145,16 +131,13 @@ async fn associate_category(
 }
 
 async fn disassociate_category(
-    State(app_state): State<AppState>,
+    State(state): State<AppState>,
     Path((brand_id, category_id)): Path<(Uuid, Uuid)>,
     current_user: CurrentUser,
 ) -> Result<impl IntoResponse, AppError> {
     let brand_id = BrandId::new(brand_id);
     let category_id = CategoryId::new(category_id);
-    app_state
-        .brand_service
-        .disassociate_category(&current_user, brand_id, category_id)
-        .await?;
+    service::disassociate_category(&state, &current_user, brand_id, category_id).await?;
     Ok(responses::success(
         axum::http::StatusCode::OK,
         "Category disassociated from brand",
