@@ -1,5 +1,5 @@
+use crate::payments::error::PaymentError;
 use serde::{Deserialize, Serialize};
-use shared::errors::AppError;
 use std::fmt;
 
 // ── AccountType ────────────────────────────────────────────
@@ -164,40 +164,43 @@ pub enum PaymentState {
 }
 
 impl PaymentState {
-    pub fn validate_for_authorize(&self) -> Result<(), AppError> {
+    pub fn validate_for_authorize(&self) -> Result<(), PaymentError> {
         match self {
-            Self::New => Ok(()),
-            Self::Failed => Ok(()),
-            state => Err(AppError::BadRequest(format!(
-                "Cannot authorize payment in state: {state:?}"
-            ))),
+            Self::New | Self::Failed => Ok(()),
+            state => Err(PaymentError::InvalidState {
+                operation: "authorize".to_string(),
+                state: *state,
+            }),
         }
     }
 
-    pub fn validate_for_capture(&self) -> Result<(), AppError> {
-        match self {
-            Self::Authorized => Ok(()),
-            state => Err(AppError::BadRequest(format!(
-                "Cannot capture payment in state: {state:?}"
-            ))),
-        }
-    }
-
-    pub fn validate_for_void(&self) -> Result<(), AppError> {
+    pub fn validate_for_capture(&self) -> Result<(), PaymentError> {
         match self {
             Self::Authorized => Ok(()),
-            state => Err(AppError::BadRequest(format!(
-                "Cannot void payment in state: {state:?}"
-            ))),
+            state => Err(PaymentError::InvalidState {
+                operation: "capture".to_string(),
+                state: *state,
+            }),
         }
     }
 
-    pub fn validate_for_refund(&self) -> Result<(), AppError> {
+    pub fn validate_for_void(&self) -> Result<(), PaymentError> {
+        match self {
+            Self::Authorized => Ok(()),
+            state => Err(PaymentError::InvalidState {
+                operation: "void".to_string(),
+                state: *state,
+            }),
+        }
+    }
+
+    pub fn validate_for_refund(&self) -> Result<(), PaymentError> {
         match self {
             Self::Captured => Ok(()),
-            state => Err(AppError::BadRequest(format!(
-                "Cannot refund payment in state: {state:?}"
-            ))),
+            state => Err(PaymentError::InvalidState {
+                operation: "refund".to_string(),
+                state: *state,
+            }),
         }
     }
 }

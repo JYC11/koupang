@@ -3,7 +3,12 @@ use crate::orders::dtos::{
     CreateOrderReq, OrderDetailRes, OrderFilter, OrderItemRes, OrderListRes, OrderRes,
     ValidCreateOrderReq,
 };
+use crate::orders::error::OrderError;
 use crate::orders::repository;
+use crate::orders::rules::{
+    CancellationContext, CreateOrderContext, cancellation_rules, creation_rules, eval_cancellation,
+    eval_creation,
+};
 use crate::orders::value_objects::{OrderId, OrderStatus};
 use shared::auth::guards::require_access;
 use shared::auth::jwt::CurrentUser;
@@ -22,6 +27,22 @@ pub async fn create_order(
     req: CreateOrderReq,
 ) -> Result<OrderRes, AppError> {
     let validated = ValidCreateOrderReq::new(idempotency_key, req)?;
+
+    // Evaluate creation rules
+    let ctx = CreateOrderContext {
+        item_count: validated.items.len(),
+        total_amount: validated.total_amount,
+        currency: validated.currency.as_str().to_string(),
+        shipping_complete: validated.shipping_address.is_complete(),
+        all_prices_positive: validated
+            .items
+            .iter()
+            .all(|i| i.unit_price.value() > rust_decimal::Decimal::ZERO),
+    };
+    let result = creation_rules().evaluate_detailed(&eval_creation(&ctx));
+    if !result.passed() {
+        return Err(OrderError::ValidationFailed(result.failure_messages().join("; ")).into());
+    }
 
     // Idempotency: return existing order if key already used
     if let Some(existing) =
@@ -133,7 +154,16 @@ pub async fn cancel_order(
     let order = repository::get_order_by_id(&state.pool, order_id).await?;
     require_access(current_user, &order.buyer_id)?;
 
-    // Validate transition
+    // Evaluate cancellation rules
+    let ctx = CancellationContext {
+        current_status: order.status.clone(),
+    };
+    let result = cancellation_rules().evaluate_detailed(&eval_cancellation(&ctx));
+    if !result.passed() {
+        return Err(OrderError::CancellationDenied(result.failure_messages().join("; ")).into());
+    }
+
+    // Validate state machine transition
     order.status.transition_to(&OrderStatus::Cancelled)?;
 
     let cancel_reason = reason.as_deref().unwrap_or("Cancelled by buyer");

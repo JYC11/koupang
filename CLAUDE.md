@@ -37,6 +37,7 @@
 | 009 | Postgres ltree for categories | Materialized path hierarchy, `<@`/`@>` tree queries |
 | 010 | Inter-service communication   | REST for queries, Kafka events for state changes    |
 | 011 | Event schema conventions      | `{svc}.{entity}.{verb}` naming, versioned envelope  |
+| 012 | Data-oriented business rules  | `Rule<A>` algebra, per-service error enums, check enums |
 
 ## Tech Stack
 
@@ -59,6 +60,8 @@ use shared::db::{PgPool, PgExec, PgConnection};
 use shared::db::transaction_support::{with_transaction, TxContext};
 use shared::errors::AppError;                   // NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest
 use shared::responses::{ok, success, created};
+use shared::rules::{Rule, RuleResult};           // composable rule algebra (ADR-012)
+use shared::new_types::money::{Price, Currency, Money}; // shared money VOs
 use shared::test_utils::db::TestDb;             // behind `test-utils` feature
 ```
 

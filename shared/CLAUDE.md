@@ -12,6 +12,7 @@ shared/src/
 ├── health.rs                  # health_routes() → GET /health
 ├── errors.rs                  # AppError enum → IntoResponse
 ├── responses.rs               # ok(), success(), created()
+├── rules.rs                   # Rule<A> algebra — composable business rules as data (ADR-012)
 ├── dto_helpers.rs             # fmt_id(), fmt_datetime(), fmt_datetime_opt()
 ├── auth/
 │   ├── jwt.rs                 # jwt:: free functions (generate/validate tokens), CurrentUser, AccessTokenClaims, JwtTokens
@@ -74,6 +75,8 @@ shared/src/
 | `auth::role` | `Role` — Buyer, Seller, Admin |
 | `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`), `ConsumerConfig` (`.new(group_id, topics)` / `.from_env()`) |
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
+| `rules` | `Rule<A>` (`Check`, `All`, `Any`, `Not`), `RuleResult<A>` (`Pass`, `Fail`, `AllOf`, `AnyOf`, `Negated`). Interpreters: `evaluate()`, `evaluate_detailed()`, `describe()`, `collect_checks()`, `collect_failures()`, `failure_messages()`. ADR-012. |
+| `new_types::money` | `Price` (non-negative Decimal), `Currency` (3-letter ISO 4217), `Money` (Price+Currency pair, `same_currency()`) |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |

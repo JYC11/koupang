@@ -308,23 +308,23 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "BUG: service requires Postgres")]
     fn infra_require_db_panics_when_none() {
         let infra = Infra {
             db: None,
             redis: None,
         };
-        let result = std::panic::catch_unwind(|| infra.require_db());
-        assert!(result.is_err());
+        infra.require_db();
     }
 
     #[test]
+    #[should_panic(expected = "BUG: service requires Redis")]
     fn infra_require_redis_panics_when_none() {
         let infra = Infra {
             db: None,
             redis: None,
         };
-        let result = std::panic::catch_unwind(|| infra.require_redis());
-        assert!(result.is_err());
+        infra.require_redis();
     }
 
     #[test]

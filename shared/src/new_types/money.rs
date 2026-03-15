@@ -69,6 +69,30 @@ impl fmt::Display for Currency {
     }
 }
 
+// ── Money (Price + Currency pair) ─────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct Money {
+    pub price: Price,
+    pub currency: Currency,
+}
+
+impl Money {
+    pub fn new(price: Price, currency: Currency) -> Self {
+        Self { price, currency }
+    }
+
+    pub fn same_currency(&self, other: &Money) -> bool {
+        self.currency == other.currency
+    }
+}
+
+impl fmt::Display for Money {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.price, self.currency)
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -122,5 +146,42 @@ mod tests {
     #[test]
     fn currency_default_is_usd() {
         assert_eq!(Currency::default().as_str(), "USD");
+    }
+
+    // ── Money ────────────────────────────────────────────
+
+    #[test]
+    fn money_same_currency() {
+        let a = Money::new(
+            Price::new(Decimal::new(100, 0)).unwrap(),
+            Currency::new("USD").unwrap(),
+        );
+        let b = Money::new(
+            Price::new(Decimal::new(200, 0)).unwrap(),
+            Currency::new("USD").unwrap(),
+        );
+        assert!(a.same_currency(&b));
+    }
+
+    #[test]
+    fn money_different_currency() {
+        let a = Money::new(
+            Price::new(Decimal::new(100, 0)).unwrap(),
+            Currency::new("USD").unwrap(),
+        );
+        let b = Money::new(
+            Price::new(Decimal::new(200, 0)).unwrap(),
+            Currency::new("KRW").unwrap(),
+        );
+        assert!(!a.same_currency(&b));
+    }
+
+    #[test]
+    fn money_display() {
+        let m = Money::new(
+            Price::new(Decimal::new(1999, 2)).unwrap(),
+            Currency::new("USD").unwrap(),
+        );
+        assert_eq!(m.to_string(), "19.99 USD");
     }
 }

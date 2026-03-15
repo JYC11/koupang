@@ -1,3 +1,4 @@
+use crate::orders::error::OrderError;
 use serde::{Deserialize, Serialize};
 use shared::errors::AppError;
 use std::fmt;
@@ -40,7 +41,7 @@ impl OrderStatus {
     }
 
     /// Validates a state transition. Returns the target status on success.
-    pub fn transition_to(&self, target: &OrderStatus) -> Result<OrderStatus, AppError> {
+    pub fn transition_to(&self, target: &OrderStatus) -> Result<OrderStatus, OrderError> {
         let allowed = match self {
             Self::Pending => matches!(target, Self::InventoryReserved | Self::Cancelled),
             Self::InventoryReserved => matches!(target, Self::PaymentAuthorized | Self::Cancelled),
@@ -54,10 +55,10 @@ impl OrderStatus {
         if allowed {
             Ok(target.clone())
         } else {
-            Err(AppError::BadRequest(format!(
-                "Invalid order status transition: {} → {}",
-                self, target
-            )))
+            Err(OrderError::InvalidTransition {
+                from: self.clone(),
+                to: target.clone(),
+            })
         }
     }
 
@@ -90,6 +91,11 @@ pub struct ShippingAddress {
     pub country: String,
 }
 
+const MAX_STREET_LEN: usize = 500;
+const MAX_CITY_LEN: usize = 200;
+const MAX_POSTAL_CODE_LEN: usize = 20;
+const MAX_COUNTRY_LEN: usize = 3;
+
 impl ShippingAddress {
     pub fn new(req: ShippingAddressReq) -> Result<Self, AppError> {
         let street = req.street.trim().to_string();
@@ -105,6 +111,27 @@ impl ShippingAddress {
             ));
         }
 
+        if street.len() > MAX_STREET_LEN {
+            return Err(AppError::BadRequest(format!(
+                "Street must not exceed {MAX_STREET_LEN} characters"
+            )));
+        }
+        if city.len() > MAX_CITY_LEN {
+            return Err(AppError::BadRequest(format!(
+                "City must not exceed {MAX_CITY_LEN} characters"
+            )));
+        }
+        if postal_code.len() > MAX_POSTAL_CODE_LEN {
+            return Err(AppError::BadRequest(format!(
+                "Postal code must not exceed {MAX_POSTAL_CODE_LEN} characters"
+            )));
+        }
+        if country.len() > MAX_COUNTRY_LEN {
+            return Err(AppError::BadRequest(format!(
+                "Country must not exceed {MAX_COUNTRY_LEN} characters"
+            )));
+        }
+
         Ok(Self {
             street,
             city,
@@ -112,6 +139,14 @@ impl ShippingAddress {
             postal_code,
             country,
         })
+    }
+
+    /// Check if the address has all required fields populated.
+    pub fn is_complete(&self) -> bool {
+        !self.street.is_empty()
+            && !self.city.is_empty()
+            && !self.postal_code.is_empty()
+            && !self.country.is_empty()
     }
 }
 
@@ -162,12 +197,19 @@ impl fmt::Display for IdempotencyKey {
 #[derive(Debug, Clone, Copy)]
 pub struct Quantity(i32);
 
+pub const MAX_ORDER_QUANTITY: i32 = 9999;
+
 impl Quantity {
     pub fn new(value: i32) -> Result<Self, AppError> {
         if value <= 0 {
             return Err(AppError::BadRequest(
                 "Quantity must be greater than 0".to_string(),
             ));
+        }
+        if value > MAX_ORDER_QUANTITY {
+            return Err(AppError::BadRequest(format!(
+                "Quantity must not exceed {MAX_ORDER_QUANTITY}"
+            )));
         }
         Ok(Self(value))
     }
@@ -305,12 +347,18 @@ mod tests {
     fn quantity_valid() {
         assert!(Quantity::new(1).is_ok());
         assert!(Quantity::new(100).is_ok());
+        assert!(Quantity::new(9999).is_ok());
     }
 
     #[test]
     fn quantity_rejects_zero_and_negative() {
         assert!(Quantity::new(0).is_err());
         assert!(Quantity::new(-1).is_err());
+    }
+
+    #[test]
+    fn quantity_rejects_over_max() {
+        assert!(Quantity::new(10000).is_err());
     }
 
     // Price and Currency tests live in shared::new_types::money.
@@ -337,6 +385,30 @@ mod tests {
             state: "".to_string(),
             postal_code: "06000".to_string(),
             country: "KR".to_string(),
+        };
+        assert!(ShippingAddress::new(req).is_err());
+    }
+
+    #[test]
+    fn shipping_address_rejects_too_long_street() {
+        let req = ShippingAddressReq {
+            street: "a".repeat(501),
+            city: "Seoul".to_string(),
+            state: "".to_string(),
+            postal_code: "06000".to_string(),
+            country: "KR".to_string(),
+        };
+        assert!(ShippingAddress::new(req).is_err());
+    }
+
+    #[test]
+    fn shipping_address_rejects_too_long_country() {
+        let req = ShippingAddressReq {
+            street: "123 Main St".to_string(),
+            city: "Seoul".to_string(),
+            state: "".to_string(),
+            postal_code: "06000".to_string(),
+            country: "KOREA".to_string(),
         };
         assert!(ShippingAddress::new(req).is_err());
     }

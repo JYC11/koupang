@@ -4,6 +4,8 @@ use crate::ledger::repository as ledger_repo;
 use crate::ledger::value_objects::{
     AccountType, EntryDirection, TransactionStatus, TransactionType,
 };
+use crate::payments::error::PaymentError;
+use crate::payments::rules::{AuthorizationContext, authorization_rules, eval_authorization};
 use rust_decimal::Decimal;
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
@@ -23,13 +25,27 @@ pub async fn authorize_payment(
     let idempotency_key = format!("auth:{order_id}");
 
     // 3-case idempotency: check if transaction already exists.
-    if let Some(existing) =
-        ledger_repo::get_transaction_by_idempotency_key(&state.pool, &idempotency_key).await?
-    {
+    let existing_tx =
+        ledger_repo::get_transaction_by_idempotency_key(&state.pool, &idempotency_key).await?;
+
+    if let Some(ref existing) = existing_tx {
         if existing.status != TransactionStatus::Discarded {
             return Ok(()); // Case 1: already processed, safe retry.
         }
         // Case 3: previous attempt failed, allow retry.
+    }
+
+    // Evaluate authorization rules
+    let transactions = ledger_repo::list_transactions_by_order(&state.pool, order_id).await?;
+    let payment_state = ledger_repo::derive_payment_state(&transactions);
+    let auth_ctx = AuthorizationContext {
+        amount,
+        currency: currency.to_string(),
+        payment_state,
+    };
+    let result = authorization_rules().evaluate_detailed(&eval_authorization(&auth_ctx));
+    if !result.passed() {
+        return Err(PaymentError::ValidationFailed(result.failure_messages().join("; ")).into());
     }
 
     let auth_result = gateway
@@ -185,19 +201,24 @@ async fn handle_tampered_amount(
         tracing::error!(order_id = %order_id, error = %e, "Failed to void tampered authorization");
     }
 
-    let reason = format!(
-        "Amount tampering detected: requested={requested}, approved={}",
-        result.approved_amount
-    );
     write_payment_event(
         state,
         order_id,
         EventType::PaymentFailed,
-        || serde_json::json!({ "order_id": order_id.to_string(), "reason": &reason }),
+        || {
+            serde_json::json!({
+                "order_id": order_id.to_string(),
+                "reason": format!("Amount tampering: requested={requested}, approved={}", result.approved_amount),
+            })
+        },
     )
     .await?;
 
-    Err(AppError::BadRequest(reason))
+    Err(PaymentError::AmountTampered {
+        requested,
+        approved: result.approved_amount,
+    }
+    .into())
 }
 
 /// Record a successful authorization: create accounts, transaction, entries, outbox.
@@ -267,8 +288,10 @@ async fn find_posted_authorization(
     let payment_state = ledger_repo::derive_payment_state(&transactions);
 
     match operation {
-        "capture" => payment_state.validate_for_capture()?,
-        "void" => payment_state.validate_for_void()?,
+        "capture" => payment_state
+            .validate_for_capture()
+            .map_err(AppError::from)?,
+        "void" => payment_state.validate_for_void().map_err(AppError::from)?,
         _ => {}
     }
 

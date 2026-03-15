@@ -146,6 +146,36 @@ impl<A> RuleResult<A> {
     }
 }
 
+impl<A: Clone> RuleResult<A> {
+    /// Collect all failed leaf checks from the result tree.
+    pub fn collect_failures(&self) -> Vec<A> {
+        match self {
+            Self::Pass { .. } => vec![],
+            Self::Fail { check } => vec![check.clone()],
+            Self::AllOf { results, .. } | Self::AnyOf { results, .. } => {
+                results.iter().flat_map(|r| r.collect_failures()).collect()
+            }
+            Self::Negated { inner, passed } => {
+                if *passed {
+                    vec![]
+                } else {
+                    inner.collect_failures()
+                }
+            }
+        }
+    }
+}
+
+impl<A: Clone + fmt::Display> RuleResult<A> {
+    /// Collect failure messages as strings, ready for error reporting.
+    pub fn failure_messages(&self) -> Vec<String> {
+        self.collect_failures()
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect()
+    }
+}
+
 impl<A: Clone> Rule<A> {
     /// Evaluate with full result tree — no boolean blindness.
     pub fn evaluate_detailed(&self, predicate: &impl Fn(&A) -> bool) -> RuleResult<A> {
@@ -368,5 +398,49 @@ mod tests {
     fn empty_any_is_vacuously_false() {
         let rule: Rule<Check> = Rule::any(vec![]);
         assert!(!rule.evaluate(&eval_check));
+    }
+
+    // ── collect_failures / failure_messages ───────────────
+
+    #[test]
+    fn collect_failures_empty_on_all_pass() {
+        let rule = Rule::check(Check::HasEmail);
+        let result = rule.evaluate_detailed(&eval_check);
+        assert!(result.collect_failures().is_empty());
+    }
+
+    #[test]
+    fn collect_failures_single_leaf() {
+        let rule = Rule::check(Check::IsAdmin);
+        let result = rule.evaluate_detailed(&eval_check);
+        let failures = result.collect_failures();
+        assert_eq!(failures.len(), 1);
+    }
+
+    #[test]
+    fn collect_failures_nested() {
+        let rule = Rule::all(vec![
+            Rule::check(Check::HasEmail),
+            Rule::check(Check::IsAdmin),
+            Rule::any(vec![
+                Rule::check(Check::IsAdmin),
+                Rule::check(Check::MinAge(99)),
+            ]),
+        ]);
+        let result = rule.evaluate_detailed(&eval_check);
+        // IsAdmin fails in All, both IsAdmin and MinAge(99) fail in Any
+        let failures = result.collect_failures();
+        assert_eq!(failures.len(), 3);
+    }
+
+    #[test]
+    fn failure_messages_formats_display() {
+        let rule = Rule::all(vec![
+            Rule::check(Check::HasEmail),
+            Rule::check(Check::IsAdmin),
+        ]);
+        let result = rule.evaluate_detailed(&eval_check);
+        let msgs = result.failure_messages();
+        assert_eq!(msgs, vec!["is admin"]);
     }
 }

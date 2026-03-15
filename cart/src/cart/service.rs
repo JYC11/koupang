@@ -3,7 +3,9 @@ use crate::cart::dtos::{
     AddToCartReq, CartRes, CartValidationItemRes, CartValidationRes, UpdateCartItemReq,
     ValidAddToCartReq, ValidUpdateCartItemReq,
 };
+use crate::cart::error::CartError;
 use crate::cart::repository;
+use crate::cart::rules::{CheckoutContext, checkout_readiness_rules, eval_checkout};
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -13,12 +15,7 @@ pub async fn get_cart(
     conn: &mut redis::aio::ConnectionManager,
     user_id: Uuid,
 ) -> Result<CartRes, AppError> {
-    let stored_items = repository::get_cart(conn, user_id).await?;
-    let domain_items: Vec<_> = stored_items
-        .into_iter()
-        .map(|s| s.to_domain())
-        .collect::<Result<_, _>>()?;
-    let cart = Cart::new(user_id, domain_items);
+    let cart = load_cart(conn, user_id).await?;
     Ok(CartRes::from_cart(&cart))
 }
 
@@ -29,14 +26,12 @@ pub async fn add_item(
 ) -> Result<CartRes, AppError> {
     let validated: ValidAddToCartReq = req.try_into()?;
 
-    // Check max items (only if adding a new SKU)
+    // Check max items (only if adding a new SKU) — single check, rule system is overkill.
     let exists = repository::item_exists(conn, user_id, validated.sku_id).await?;
     if !exists {
         let count = repository::cart_item_count(conn, user_id).await?;
         if count >= MAX_CART_ITEMS {
-            return Err(AppError::BadRequest(format!(
-                "Cart is full (max {MAX_CART_ITEMS} items)"
-            )));
+            return Err(CartError::CartFull { max: MAX_CART_ITEMS }.into());
         }
     }
 
@@ -56,7 +51,7 @@ pub async fn update_item_quantity(
 
     let existing = repository::get_cart_item(conn, user_id, sku_id)
         .await?
-        .ok_or(AppError::NotFound("Cart item not found".to_string()))?;
+        .ok_or(CartError::ItemNotFound(format!("SKU {sku_id} not in cart")))?;
 
     let mut updated = existing;
     updated.quantity = validated.quantity.value();
@@ -81,25 +76,34 @@ pub async fn clear_cart(
     repository::clear_cart(conn, user_id).await
 }
 
-/// Stub: returns all items as valid until catalog integration is built.
+/// Validate cart readiness for checkout using composable rule tree.
+/// Item-level validation (prices, stock) still stubbed until catalog integration.
 pub async fn validate_cart(
     conn: &mut redis::aio::ConnectionManager,
     user_id: Uuid,
 ) -> Result<CartValidationRes, AppError> {
-    let stored_items = repository::get_cart(conn, user_id).await?;
+    let cart = load_cart(conn, user_id).await?;
 
-    let items: Vec<CartValidationItemRes> = stored_items
+    // Evaluate checkout readiness rules
+    let ctx = CheckoutContext::from_cart(&cart);
+    let rules = checkout_readiness_rules();
+    let result = rules.evaluate_detailed(&eval_checkout(&ctx));
+
+    if !result.passed() {
+        return Err(CartError::CheckoutNotReady(result.failure_messages().join("; ")).into());
+    }
+
+    // Item-level validation (stubbed until catalog integration)
+    let items: Vec<CartValidationItemRes> = cart
+        .items
         .iter()
-        .map(|item| {
-            let price: rust_decimal::Decimal = item.unit_price.parse().unwrap_or_default();
-            CartValidationItemRes {
-                sku_id: item.sku_id.to_string(),
-                price_changed: false,
-                snapshot_price: price,
-                current_price: Some(price), // Stub: assume same price
-                product_unavailable: false,
-                stock_insufficient: false,
-            }
+        .map(|item| CartValidationItemRes {
+            sku_id: item.sku_id.to_string(),
+            price_changed: false,
+            snapshot_price: item.unit_price.value(),
+            current_price: Some(item.unit_price.value()),
+            product_unavailable: false,
+            stock_insufficient: false,
         })
         .collect();
 
@@ -107,4 +111,18 @@ pub async fn validate_cart(
         all_valid: true,
         items,
     })
+}
+
+// ── Helpers ──────────────────────────────────────────────
+
+async fn load_cart(
+    conn: &mut redis::aio::ConnectionManager,
+    user_id: Uuid,
+) -> Result<Cart, AppError> {
+    let stored_items = repository::get_cart(conn, user_id).await?;
+    let domain_items: Vec<_> = stored_items
+        .into_iter()
+        .map(|s| s.to_domain())
+        .collect::<Result<_, _>>()?;
+    Ok(Cart::new(user_id, domain_items))
 }
