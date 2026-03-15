@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::env_parse;
+use super::parse_env_or;
 
 /// Configuration for `KafkaEventConsumer`. No `Default` — `group_id` and `topics` are required.
 pub struct ConsumerConfig {
@@ -59,26 +59,26 @@ impl ConsumerConfig {
         Self {
             group_id: group_id.into(),
             topics,
-            max_retries: env_parse("EVENT_CONSUMER_MAX_RETRIES", 3),
-            retry_base_delay: Duration::from_millis(env_parse(
+            max_retries: parse_env_or("EVENT_CONSUMER_MAX_RETRIES", 3),
+            retry_base_delay: Duration::from_millis(parse_env_or(
                 "EVENT_CONSUMER_RETRY_BASE_DELAY_MS",
                 1000,
             )),
-            retry_max_delay: Duration::from_secs(env_parse(
+            retry_max_delay: Duration::from_secs(parse_env_or(
                 "EVENT_CONSUMER_RETRY_MAX_DELAY_SECS",
                 30,
             )),
             dlq_topic_override: std::env::var("EVENT_CONSUMER_DLQ_TOPIC").ok(),
-            session_timeout: Duration::from_secs(env_parse(
+            session_timeout: Duration::from_secs(parse_env_or(
                 "EVENT_CONSUMER_SESSION_TIMEOUT_SECS",
                 30,
             )),
-            auto_create_dlq_topics: env_parse("EVENT_CONSUMER_AUTO_CREATE_DLQ", true),
-            processed_events_cleanup_interval: Duration::from_secs(env_parse(
+            auto_create_dlq_topics: parse_env_or("EVENT_CONSUMER_AUTO_CREATE_DLQ", true),
+            processed_events_cleanup_interval: Duration::from_secs(parse_env_or(
                 "EVENT_CONSUMER_CLEANUP_INTERVAL_SECS",
                 3600,
             )),
-            processed_events_max_age: Duration::from_secs(env_parse(
+            processed_events_max_age: Duration::from_secs(parse_env_or(
                 "EVENT_CONSUMER_CLEANUP_MAX_AGE_SECS",
                 7 * 24 * 3600,
             )),

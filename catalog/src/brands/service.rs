@@ -117,7 +117,6 @@ pub async fn associate_category(
 ) -> Result<(), AppError> {
     require_admin(current_user)?;
 
-    // Verify both exist
     repository::get_brand_by_id(&state.pool, brand_id).await?;
     category_repo::get_category_by_id(&state.pool, category_id).await?;
 

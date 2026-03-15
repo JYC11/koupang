@@ -1,4 +1,4 @@
-use super::env_or;
+use super::read_env_or;
 
 pub struct KafkaConfig {
     pub brokers: String,
@@ -8,7 +8,7 @@ impl KafkaConfig {
     /// Reads `KAFKA_BROKERS` from environment, defaults to `"localhost:29092"`.
     pub fn new() -> Self {
         Self {
-            brokers: env_or("KAFKA_BROKERS", "localhost:29092".to_string()),
+            brokers: read_env_or("KAFKA_BROKERS", "localhost:29092".to_string()),
         }
     }
 

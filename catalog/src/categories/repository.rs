@@ -193,24 +193,27 @@ pub async fn delete_category(tx: &mut PgConnection, id: CategoryId) -> Result<()
 
 /// Check if a category has child categories.
 pub async fn has_children<'e>(executor: impl PgExec<'e>, id: CategoryId) -> Result<bool, AppError> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM categories WHERE parent_id = $1")
-        .bind(id.value())
-        .fetch_one(executor)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to check children: {}", e)))?;
+    let row: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM categories WHERE parent_id = $1)")
+            .bind(id.value())
+            .fetch_one(executor)
+            .await
+            .map_err(|e| {
+                AppError::InternalServerError(format!("Failed to check children: {}", e))
+            })?;
 
-    Ok(row.0 > 0)
+    Ok(row.0)
 }
 
 /// Check if any products reference this category.
 pub async fn has_products<'e>(executor: impl PgExec<'e>, id: CategoryId) -> Result<bool, AppError> {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM products WHERE category_id = $1 AND deleted_at IS NULL",
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM products WHERE category_id = $1 AND deleted_at IS NULL)",
     )
     .bind(id.value())
     .fetch_one(executor)
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
 
-    Ok(row.0 > 0)
+    Ok(row.0)
 }

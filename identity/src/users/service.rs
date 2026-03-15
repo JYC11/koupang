@@ -133,20 +133,16 @@ pub async fn delete_user_account(state: &AppState, id: UserId) -> Result<(), App
 }
 
 pub async fn login_user(state: &AppState, req: UserLoginReq) -> Result<UserLoginRes, AppError> {
-    // Find user by username/email
     let user = get_user_by_username(&state.pool, Username::new(&req.username)?).await?;
 
-    // Check email verification
     if !user.email_verified {
         return Err(AppError::Forbidden(
             "Please verify your email before logging in".to_string(),
         ));
     }
 
-    // Verify password
     verify_password(&req.password, &HashedPassword::new(user.password.clone()))?;
 
-    // Generate tokens
     let access_token =
         jwt::generate_access_token(&state.auth_config, &user.id, &user.username, user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
@@ -164,13 +160,11 @@ pub async fn generate_refresh_token(
     state: &AppState,
     req: UserRefreshReq,
 ) -> Result<UserRefreshRes, AppError> {
-    // Validate refresh token and extract user ID
     let claims = jwt::validate_refresh_token(&state.auth_config, &req.refresh_token)
         .map_err(|e| AppError::Unauthorized(e.to_string()))?;
 
     let user = get_user_by_id(&state.pool, UserId::new(claims.sub)).await?;
 
-    // Generate new access token
     let access_token =
         jwt::generate_access_token(&state.auth_config, &user.id, &user.username, user.role)
             .map_err(|e| AppError::Unauthorized(e.to_string()))?;
@@ -253,13 +247,11 @@ pub async fn change_password(
 ) -> Result<(), AppError> {
     let user = get_user_by_id(&state.pool, user_id).await?;
 
-    // Verify current password
     verify_password(
         &req.current_password,
         &HashedPassword::new(user.password.clone()),
     )?;
 
-    // Ensure new password is different
     if req.current_password == req.new_password {
         return Err(AppError::BadRequest(
             "New password must be different from the current password".to_string(),

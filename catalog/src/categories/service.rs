@@ -20,7 +20,6 @@ pub async fn create_category(
 
     let validated: ValidCreateCategoryReq = req.try_into()?;
 
-    // Compute path and depth from parent
     const MAX_CATEGORY_DEPTH: i32 = 10;
     let (path, depth) = match validated.parent_id {
         Some(parent_id) => {
@@ -77,7 +76,6 @@ pub async fn get_children(
     id: CategoryId,
     params: PaginationParams,
 ) -> Result<PaginationRes<CategoryRes>, AppError> {
-    // Verify parent exists
     repository::get_category_by_id(&state.pool, id).await?;
     let mut children = repository::get_children(&state.pool, id, &params).await?;
     let cursors = get_cursors(&params, &mut children);
@@ -105,7 +103,6 @@ pub async fn update_category(
 ) -> Result<(), AppError> {
     require_admin(current_user)?;
 
-    // Verify exists
     repository::get_category_by_id(&state.pool, id).await?;
 
     let validated: ValidUpdateCategoryReq = req.try_into()?;
@@ -130,7 +127,6 @@ pub async fn delete_category(
 ) -> Result<(), AppError> {
     require_admin(current_user)?;
 
-    // Verify exists
     repository::get_category_by_id(&state.pool, id).await?;
 
     // Guard: cannot delete if has children

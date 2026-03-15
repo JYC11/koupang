@@ -77,7 +77,9 @@ where
             Ok(result)
         }
         Err(e) => {
-            let _ = tx_ctx.rollback().await;
+            if let Err(rb_err) = tx_ctx.rollback().await {
+                tracing::warn!(error = %rb_err, "Transaction rollback failed");
+            }
             Err(e)
         }
     }
@@ -110,10 +112,12 @@ where
             Ok(result)
         }
         Err(e) => {
-            // Rollback to savepoint
-            let _ = sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
+            if let Err(rb_err) = sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp_name}"))
                 .execute(tx_ctx.as_executor())
-                .await;
+                .await
+            {
+                tracing::warn!(savepoint = %sp_name, error = %rb_err, "Savepoint rollback failed");
+            }
             Err(e)
         }
     }

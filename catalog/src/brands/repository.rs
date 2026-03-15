@@ -134,16 +134,15 @@ pub async fn delete_brand(tx: &mut PgConnection, id: BrandId) -> Result<(), AppE
 
 /// Check if any products reference this brand.
 pub async fn has_products<'e>(executor: impl PgExec<'e>, id: BrandId) -> Result<bool, AppError> {
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM products WHERE brand_id = $1 AND deleted_at IS NULL")
-            .bind(id.value())
-            .fetch_one(executor)
-            .await
-            .map_err(|e| {
-                AppError::InternalServerError(format!("Failed to check products: {}", e))
-            })?;
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM products WHERE brand_id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(id.value())
+    .fetch_one(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to check products: {}", e)))?;
 
-    Ok(row.0 > 0)
+    Ok(row.0)
 }
 
 // ── Brand-Category association queries ─────────────────────
