@@ -4,7 +4,9 @@ use crate::products::dtos::{
     ProductFilter, ValidAddProductImageReq, ValidCreateProductReq, ValidCreateSkuReq,
     ValidUpdateProductReq, ValidUpdateSkuReq,
 };
-use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
+use crate::products::entities::{
+    ProductDetailRow, ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity,
+};
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::db::pagination_support::{PaginationParams, keyset_paginate};
 use shared::db::{PgExec, PgPool};
@@ -60,6 +62,41 @@ pub async fn get_product_by_slug<'e>(
         .fetch_one(executor)
         .await
         .map_err(|e| AppError::NotFound(format!("Product not found: {}", e)))
+}
+
+/// Fetch product with SKUs and images in a single query using LATERAL + json_agg.
+pub async fn get_product_detail<'e>(
+    executor: impl PgExec<'e>,
+    id: ProductId,
+) -> Result<ProductDetailRow, AppError> {
+    sqlx::query_as::<_, ProductDetailRow>(
+        "SELECT p.*, \
+                c.name AS category_name, c.slug AS category_slug, \
+                b.name AS brand_name, b.slug AS brand_slug, \
+                COALESCE(s.skus_json, '[]'::json) AS skus_json, \
+                COALESCE(i.images_json, '[]'::json) AS images_json \
+         FROM products p \
+         LEFT JOIN categories c ON p.category_id = c.id \
+         LEFT JOIN brands b ON p.brand_id = b.id \
+         LEFT JOIN LATERAL ( \
+             SELECT json_agg(row_to_json(sr)) AS skus_json \
+             FROM (SELECT id, created_at, updated_at, deleted_at, product_id, \
+                          sku_code, price, stock_quantity, attributes, status \
+                   FROM skus WHERE product_id = p.id AND deleted_at IS NULL \
+                   ORDER BY created_at ASC LIMIT 100) sr \
+         ) s ON true \
+         LEFT JOIN LATERAL ( \
+             SELECT json_agg(row_to_json(ir)) AS images_json \
+             FROM (SELECT id, created_at, product_id, url, alt_text, sort_order, is_primary \
+                   FROM product_images WHERE product_id = p.id \
+                   ORDER BY sort_order ASC LIMIT 50) ir \
+         ) i ON true \
+         WHERE p.id = $1 AND p.deleted_at IS NULL",
+    )
+    .bind(id.value())
+    .fetch_one(executor)
+    .await
+    .map_err(|e| AppError::NotFound(format!("Product not found: {}", e)))
 }
 
 fn apply_product_filters(qb: &mut QueryBuilder<Postgres>, filter: &ProductFilter) {

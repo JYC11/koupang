@@ -81,15 +81,8 @@ pub async fn get_product_detail(
         return Ok(cached);
     }
 
-    let product = repository::get_product_by_id(&state.pool, id).await?;
-    let skus = repository::list_skus_by_product(&state.pool, id).await?;
-    let images = repository::list_images_by_product(&state.pool, id).await?;
-
-    let detail = ProductDetailRes {
-        product: ProductRes::new(product),
-        skus: skus.into_iter().map(SkuRes::new).collect(),
-        images: images.into_iter().map(ProductImageRes::new).collect(),
-    };
+    let row = repository::get_product_detail(&state.pool, id).await?;
+    let detail = ProductDetailRes::from_row(row)?;
 
     state.cache.set(&cache_key, &detail).await;
     Ok(detail)

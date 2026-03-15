@@ -1,6 +1,8 @@
 use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
-use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
+use crate::products::entities::{
+    ProductDetailRow, ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity,
+};
 use crate::products::value_objects::{
     Currency, ImageUrl, Price, ProductName, ProductStatus, SearchQuery, SkuCode, SkuStatus, Slug,
     StockQuantity,
@@ -252,6 +254,40 @@ pub struct ProductDetailRes {
     pub product: ProductRes,
     pub skus: Vec<SkuRes>,
     pub images: Vec<ProductImageRes>,
+}
+
+impl ProductDetailRes {
+    pub fn from_row(row: ProductDetailRow) -> Result<Self, AppError> {
+        let product = ProductRes {
+            id: fmt_id(&row.id),
+            created_at: fmt_datetime(&row.created_at),
+            updated_at: fmt_datetime_opt(&row.updated_at),
+            seller_id: fmt_id(&row.seller_id),
+            name: row.name,
+            slug: row.slug,
+            description: row.description,
+            base_price: row.base_price,
+            currency: row.currency,
+            category_id: row.category_id.map(|id| fmt_id(&id)),
+            brand_id: row.brand_id.map(|id| fmt_id(&id)),
+            status: row.status,
+            category_name: row.category_name,
+            category_slug: row.category_slug,
+            brand_name: row.brand_name,
+            brand_slug: row.brand_slug,
+        };
+
+        let skus: Vec<SkuEntity> = serde_json::from_value(row.skus_json)
+            .map_err(|e| AppError::InternalServerError(format!("Failed to parse SKUs: {e}")))?;
+        let images: Vec<ProductImageEntity> = serde_json::from_value(row.images_json)
+            .map_err(|e| AppError::InternalServerError(format!("Failed to parse images: {e}")))?;
+
+        Ok(Self {
+            product,
+            skus: skus.into_iter().map(SkuRes::new).collect(),
+            images: images.into_iter().map(ProductImageRes::new).collect(),
+        })
+    }
 }
 
 // ── Validated DTOs ──────────────────────────────────────────
