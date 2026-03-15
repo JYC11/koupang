@@ -2,6 +2,7 @@ use crate::common::sample_create_req;
 use identity::users::dtos::ValidUserCreateReq;
 use identity::users::grpc_service::IdentityGrpcService;
 use identity::users::repository::create_user;
+use identity::users::value_objects::HashedPassword;
 use shared::db::PgPool;
 use shared::grpc::identity::GetUserRequest;
 use shared::grpc::identity::identity_service_client::IdentityServiceClient;
@@ -25,7 +26,7 @@ async fn get_user_returns_correct_response() {
     let username = req.username.clone();
     let email = req.email.clone();
     let role = req.role;
-    let password = req.password.clone();
+    let password = HashedPassword::new(req.password.clone());
     let validated: ValidUserCreateReq = req.try_into().unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
@@ -56,7 +57,7 @@ async fn get_user_verified_email_flag() {
 
     let req = sample_create_req();
     let username = req.username.clone();
-    let password = req.password.clone();
+    let password = HashedPassword::new(req.password.clone());
     let validated: ValidUserCreateReq = req.try_into().unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
@@ -139,7 +140,7 @@ async fn get_user_deleted_returns_not_found() {
     let pool = db.pool.clone();
 
     let req = sample_create_req();
-    let password = req.password.clone();
+    let password = HashedPassword::new(req.password.clone());
     let validated: ValidUserCreateReq = req.try_into().unwrap();
 
     let mut conn = pool.acquire().await.unwrap();

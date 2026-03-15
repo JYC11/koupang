@@ -2,12 +2,14 @@ use crate::common::{sample_create_req, sample_create_req_2, sample_update_req};
 use chrono::{Duration, Utc};
 use identity::users::dtos::{ValidUserCreateReq, ValidUserUpdateReq};
 use identity::users::repository::*;
-use identity::users::value_objects::{Email, UserId, Username};
+use identity::users::value_objects::{Email, HashedPassword, UserId, Username};
 use shared::errors::AppError;
 use uuid::Uuid;
 
-fn validated_create(req: identity::users::dtos::UserCreateReq) -> (ValidUserCreateReq, String) {
-    let password = req.password.clone();
+fn validated_create(
+    req: identity::users::dtos::UserCreateReq,
+) -> (ValidUserCreateReq, HashedPassword) {
+    let password = HashedPassword::new(req.password.clone());
     let validated: ValidUserCreateReq = req.try_into().expect("sample data should be valid");
     (validated, password)
 }

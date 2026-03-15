@@ -108,6 +108,28 @@ impl fmt::Display for Password {
     }
 }
 
+// ── HashedPassword ─────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct HashedPassword(String);
+
+impl HashedPassword {
+    pub fn new(hash: String) -> Self {
+        debug_assert!(!hash.is_empty(), "Hashed password must not be empty");
+        Self(hash)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for HashedPassword {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("********")
+    }
+}
+
 // ── Phone ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

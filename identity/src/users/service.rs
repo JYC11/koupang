@@ -12,7 +12,7 @@ use crate::users::repository::{
     update_user_password, verify_user_email,
 };
 use crate::users::value_objects::{
-    Email, EmailTokenId, Password, PasswordTokenId, UserId, Username,
+    Email, EmailTokenId, HashedPassword, Password, PasswordTokenId, UserId, Username,
 };
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
@@ -144,7 +144,7 @@ pub async fn login_user(state: &AppState, req: UserLoginReq) -> Result<UserLogin
     }
 
     // Verify password
-    verify_password(&req.password, &user.password)?;
+    verify_password(&req.password, &HashedPassword::new(user.password.clone()))?;
 
     // Generate tokens
     let access_token =
@@ -254,7 +254,10 @@ pub async fn change_password(
     let user = get_user_by_id(&state.pool, user_id).await?;
 
     // Verify current password
-    verify_password(&req.current_password, &user.password)?;
+    verify_password(
+        &req.current_password,
+        &HashedPassword::new(user.password.clone()),
+    )?;
 
     // Ensure new password is different
     if req.current_password == req.new_password {
@@ -289,19 +292,19 @@ fn generate_verification_token() -> String {
 }
 
 /// Hash a plaintext password using Argon2
-fn hash_password(password: &str) -> Result<String, AppError> {
+fn hash_password(password: &str) -> Result<HashedPassword, AppError> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
 
     argon2
         .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
+        .map(|hash| HashedPassword::new(hash.to_string()))
         .map_err(|e| AppError::InternalServerError(format!("Failed to hash password: {}", e)))
 }
 
-/// Verify a plaintext password against a hash
-fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
-    let parsed_hash = PasswordHash::new(hash)
+/// Verify a plaintext password against a stored hash
+fn verify_password(password: &str, hash: &HashedPassword) -> Result<(), AppError> {
+    let parsed_hash = PasswordHash::new(hash.as_str())
         .map_err(|e| AppError::InternalServerError(format!("Invalid password hash: {}", e)))?;
 
     let argon2 = Argon2::default();

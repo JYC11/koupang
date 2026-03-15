@@ -122,8 +122,12 @@ impl OutboxRelay {
     }
 
     /// Drain all available pending events in a loop until a batch returns empty.
+    ///
+    /// Bounded to 100 iterations to prevent indefinite looping if events are
+    /// inserted faster than they are published.
     async fn process_pending(&self, shutdown: &CancellationToken) {
-        loop {
+        const MAX_ITERATIONS: usize = 100;
+        for _ in 0..MAX_ITERATIONS {
             if shutdown.is_cancelled() {
                 return;
             }
@@ -141,6 +145,7 @@ impl OutboxRelay {
                 }
             }
         }
+        tracing::warn!("Relay hit max iterations ({MAX_ITERATIONS}), yielding to next poll cycle");
     }
 
     /// Claim a batch, publish each event, and update status. Returns the number of events processed.

@@ -1,5 +1,5 @@
 use crate::users::entities::UserEntity;
-use crate::users::value_objects::{Email, Password, Phone, UserId, Username};
+use crate::users::value_objects::{Email, HashedPassword, Phone, UserId, Username};
 use shared::auth::Role;
 use shared::errors::AppError;
 
@@ -7,7 +7,7 @@ use shared::errors::AppError;
 pub struct User {
     pub id: UserId,
     pub username: Username,
-    pub password: Password,
+    pub password: HashedPassword,
     pub email: Email,
     pub phone: Phone,
     pub role: Role,
@@ -20,7 +20,7 @@ impl TryFrom<UserEntity> for User {
         Ok(Self {
             id: UserId::new(entity.id),
             username: Username::new(&entity.username)?,
-            password: Password::new(&entity.password)?,
+            password: HashedPassword::new(entity.password),
             email: Email::new(&entity.email)?,
             phone: Phone::new(&entity.phone)?,
             role: entity.role,

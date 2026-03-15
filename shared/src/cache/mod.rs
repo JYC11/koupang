@@ -1,23 +1,24 @@
 use crate::config::redis_config::RedisConfig;
 use redis::AsyncCommands;
 
-pub async fn init_redis(config: RedisConfig) -> redis::aio::ConnectionManager {
-    let client = redis::Client::open(config.url.as_str()).expect("Failed to create Redis client");
-    redis::aio::ConnectionManager::new(client)
-        .await
-        .expect("Failed to create Redis connection manager")
+pub async fn init_redis(
+    config: RedisConfig,
+) -> Result<redis::aio::ConnectionManager, Box<dyn std::error::Error>> {
+    let client = redis::Client::open(config.url.as_str())?;
+    let conn = redis::aio::ConnectionManager::new(client).await?;
+    Ok(conn)
 }
 
 /// Initializes Redis if `REDIS_URL` is set. Returns `None` otherwise.
 pub async fn init_optional_redis() -> Option<redis::aio::ConnectionManager> {
-    match RedisConfig::try_new() {
-        Some(config) => {
-            let conn = init_redis(config).await;
+    let config = RedisConfig::try_new()?;
+    match init_redis(config).await {
+        Ok(conn) => {
             tracing::info!("Redis connection established");
             Some(conn)
         }
-        None => {
-            tracing::info!("REDIS_URL not set, running without cache");
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to connect to Redis, running without cache");
             None
         }
     }

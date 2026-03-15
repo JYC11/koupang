@@ -1,6 +1,8 @@
 use crate::users::dtos::{ValidUserCreateReq, ValidUserUpdateReq};
 use crate::users::entities::{EmailVerificationTokenEntity, PasswordResetTokenEntity, UserEntity};
-use crate::users::value_objects::{Email, EmailTokenId, PasswordTokenId, UserId, Username};
+use crate::users::value_objects::{
+    Email, EmailTokenId, HashedPassword, PasswordTokenId, UserId, Username,
+};
 use chrono::{DateTime, Utc};
 use shared::db::PgExec;
 use shared::errors::AppError;
@@ -34,7 +36,7 @@ pub async fn get_user_by_username<'e>(
 pub async fn create_user(
     tx: &mut PgConnection,
     req: ValidUserCreateReq,
-    hashed_password: &str,
+    hashed_password: &HashedPassword,
 ) -> Result<UserId, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "INSERT INTO users (username, password, email, phone, role)
@@ -42,7 +44,7 @@ pub async fn create_user(
              RETURNING id",
     )
     .bind(req.username.as_str())
-    .bind(hashed_password)
+    .bind(hashed_password.as_str())
     .bind(req.email.as_str())
     .bind(req.phone.as_str())
     .bind(&req.role)
@@ -260,10 +262,10 @@ pub async fn mark_reset_token_used(
 pub async fn update_user_password(
     tx: &mut PgConnection,
     user_id: UserId,
-    hashed_password: &str,
+    hashed_password: &HashedPassword,
 ) -> Result<(), AppError> {
     let result = sqlx::query("UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2")
-        .bind(hashed_password)
+        .bind(hashed_password.as_str())
         .bind(user_id.value())
         .execute(&mut *tx)
         .await

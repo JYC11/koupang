@@ -97,7 +97,7 @@ impl ServiceBuilder {
         F: FnOnce(&Infra) -> Router,
     {
         let port = self.parse_http_port();
-        let infra = self.init_infra().await;
+        let infra = self.init_infra().await?;
         let app = build_app(&infra).merge(health_routes(self.name));
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
@@ -129,7 +129,7 @@ impl ServiceBuilder {
         assert!(grpc_port > 0, "gRPC port must be positive");
         let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
-        let infra = self.init_infra().await;
+        let infra = self.init_infra().await?;
         let app = build_app(&infra).merge(health_routes(self.name));
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
@@ -143,16 +143,16 @@ impl ServiceBuilder {
         Ok(())
     }
 
-    async fn init_infra(&self) -> Infra {
+    async fn init_infra(&self) -> Result<Infra, Box<dyn Error>> {
         init_tracing(self.name);
         let db_config = DbConfig::new(self.db_url_env);
-        let pool = init_db(db_config, self.migrations_dir).await;
+        let pool = init_db(db_config, self.migrations_dir).await?;
         let redis = if self.redis {
             init_optional_redis().await
         } else {
             None
         };
-        Infra { db: pool, redis }
+        Ok(Infra { db: pool, redis })
     }
 
     fn parse_http_port(&self) -> u16 {
