@@ -18,6 +18,16 @@ impl TryFrom<CategoryEntity> for Category {
     type Error = AppError;
 
     fn try_from(value: CategoryEntity) -> Result<Self, Self::Error> {
+        debug_assert!(value.depth >= 0, "Category depth must be non-negative");
+        debug_assert!(
+            value.parent_id.is_some() || value.depth == 0,
+            "Root categories must have depth 0"
+        );
+        debug_assert!(
+            value.parent_id.is_none() || value.depth > 0,
+            "Non-root categories must have depth > 0"
+        );
+
         Ok(Self {
             id: value.id,
             name: CategoryName::new(&value.name)?,

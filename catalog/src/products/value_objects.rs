@@ -223,6 +223,36 @@ impl fmt::Display for SkuStatus {
     }
 }
 
+// ── SearchQuery ────────────────────────────────────────────
+
+const SEARCH_MAX_LEN: usize = 200;
+
+#[derive(Debug, Clone)]
+pub struct SearchQuery(String);
+
+impl SearchQuery {
+    pub fn new(input: &str) -> Result<Self, AppError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::BadRequest(
+                "Search query must not be empty".to_string(),
+            ));
+        }
+        let truncated: String = trimmed.chars().take(SEARCH_MAX_LEN).collect();
+        Ok(Self(truncated))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SearchQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -407,5 +437,32 @@ mod tests {
         assert_eq!(SkuStatus::Active.as_str(), "active");
         assert_eq!(SkuStatus::Inactive.as_str(), "inactive");
         assert_eq!(SkuStatus::OutOfStock.as_str(), "out_of_stock");
+    }
+
+    // ── SearchQuery tests ───────────────────────────────────
+
+    #[test]
+    fn search_query_valid() {
+        let q = SearchQuery::new("laptop").unwrap();
+        assert_eq!(q.as_str(), "laptop");
+    }
+
+    #[test]
+    fn search_query_trims_whitespace() {
+        let q = SearchQuery::new("  laptop  ").unwrap();
+        assert_eq!(q.as_str(), "laptop");
+    }
+
+    #[test]
+    fn search_query_rejects_empty() {
+        assert!(SearchQuery::new("").is_err());
+        assert!(SearchQuery::new("   ").is_err());
+    }
+
+    #[test]
+    fn search_query_truncates_to_max_len() {
+        let long = "a".repeat(300);
+        let q = SearchQuery::new(&long).unwrap();
+        assert_eq!(q.as_str().len(), 200);
     }
 }

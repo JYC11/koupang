@@ -187,6 +187,16 @@ async fn adjust_stock(
     current_user: CurrentUser,
     Json(req): Json<AdjustStockReq>,
 ) -> Result<impl IntoResponse, AppError> {
+    if req.delta == 0 {
+        return Err(AppError::BadRequest(
+            "Stock delta must not be zero".to_string(),
+        ));
+    }
+    if req.delta.abs() > 10_000 {
+        return Err(AppError::BadRequest(
+            "Stock delta must be between -10000 and 10000".to_string(),
+        ));
+    }
     let sku_id = SkuId::new(sku_id);
     service::adjust_stock(&state, &current_user, sku_id, req.delta).await?;
     Ok(responses::success(

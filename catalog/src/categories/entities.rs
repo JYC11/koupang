@@ -1,3 +1,4 @@
+use shared::db::pagination_support::HasId;
 use sqlx::FromRow;
 use sqlx::types::Uuid;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -13,4 +14,10 @@ pub struct CategoryEntity {
     pub parent_id: Option<Uuid>,
     pub depth: i32,
     pub description: Option<String>,
+}
+
+impl HasId for CategoryEntity {
+    fn id(&self) -> Uuid {
+        self.id
+    }
 }

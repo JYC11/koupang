@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::categories::dtos::{CategoryRes, CreateCategoryReq};
+use shared::db::pagination_support::PaginatedResponse;
 use shared::test_utils::http::{authed_delete, authed_json_request, body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -63,8 +64,9 @@ async fn list_root_categories_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(categories.len(), 2);
+    let page: PaginatedResponse<CategoryRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(page.items.len(), 2);
 }
 
 #[tokio::test]
@@ -156,8 +158,9 @@ async fn get_children_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let children: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(children.len(), 2);
+    let page: PaginatedResponse<CategoryRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(page.items.len(), 2);
 }
 
 #[tokio::test]

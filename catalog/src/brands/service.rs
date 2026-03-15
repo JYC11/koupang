@@ -9,6 +9,7 @@ use crate::categories::repository as category_repo;
 use crate::categories::value_objects::CategoryId;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
+use shared::db::pagination_support::{PaginationParams, PaginationRes, get_cursors};
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 
@@ -45,9 +46,14 @@ pub async fn get_brand_by_slug(state: &AppState, slug: &str) -> Result<BrandRes,
     Ok(BrandRes::new(brand))
 }
 
-pub async fn list_brands(state: &AppState) -> Result<Vec<BrandRes>, AppError> {
-    let brands = repository::list_brands(&state.pool).await?;
-    Ok(brands.into_iter().map(BrandRes::new).collect())
+pub async fn list_brands(
+    state: &AppState,
+    params: PaginationParams,
+) -> Result<PaginationRes<BrandRes>, AppError> {
+    let mut brands = repository::list_brands(&state.pool, &params).await?;
+    let cursors = get_cursors(&params, &mut brands);
+    let items = brands.into_iter().map(BrandRes::new).collect();
+    Ok(PaginationRes::new(items, cursors))
 }
 
 pub async fn update_brand(
@@ -154,8 +160,12 @@ pub async fn disassociate_category(
 pub async fn list_categories_for_brand(
     state: &AppState,
     brand_id: BrandId,
-) -> Result<Vec<CategoryRes>, AppError> {
+    params: PaginationParams,
+) -> Result<PaginationRes<CategoryRes>, AppError> {
     repository::get_brand_by_id(&state.pool, brand_id).await?;
-    let categories = repository::list_categories_for_brand(&state.pool, brand_id).await?;
-    Ok(categories.into_iter().map(CategoryRes::new).collect())
+    let mut categories =
+        repository::list_categories_for_brand(&state.pool, brand_id, &params).await?;
+    let cursors = get_cursors(&params, &mut categories);
+    let items = categories.into_iter().map(CategoryRes::new).collect();
+    Ok(PaginationRes::new(items, cursors))
 }

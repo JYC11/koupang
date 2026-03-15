@@ -45,26 +45,33 @@ impl RelayConfig {
     /// | `OUTBOX_RELAY_CLEANUP_MAX_AGE_SECS` | u64 | 604800 (7 days) |
     /// | `OUTBOX_RELAY_DELETE_ON_PUBLISH` | bool | false |
     pub fn from_env() -> Self {
+        let batch_size = env_parse("OUTBOX_RELAY_BATCH_SIZE", 50);
+        let poll_interval_ms: u64 = env_parse("OUTBOX_RELAY_POLL_INTERVAL_MS", 500);
+        let stale_lock_check_secs: u64 =
+            env_parse("OUTBOX_RELAY_STALE_LOCK_CHECK_INTERVAL_SECS", 30);
+        let stale_lock_timeout_secs: u64 = env_parse("OUTBOX_RELAY_STALE_LOCK_TIMEOUT_SECS", 60);
+        let cleanup_interval_secs: u64 = env_parse("OUTBOX_RELAY_CLEANUP_INTERVAL_SECS", 3600);
+        let cleanup_max_age_secs: u64 =
+            env_parse("OUTBOX_RELAY_CLEANUP_MAX_AGE_SECS", 7 * 24 * 3600);
+
+        assert!(batch_size > 0, "OUTBOX_RELAY_BATCH_SIZE must be positive");
+        assert!(
+            poll_interval_ms > 0,
+            "OUTBOX_RELAY_POLL_INTERVAL_MS must be positive"
+        );
+        assert!(
+            stale_lock_timeout_secs > stale_lock_check_secs,
+            "stale_lock_timeout must exceed stale_lock_check_interval"
+        );
+
         Self {
             instance_id: env_or("OUTBOX_RELAY_INSTANCE_ID", Uuid::now_v7().to_string()),
-            batch_size: env_parse("OUTBOX_RELAY_BATCH_SIZE", 50),
-            poll_interval: Duration::from_millis(env_parse("OUTBOX_RELAY_POLL_INTERVAL_MS", 500)),
-            stale_lock_check_interval: Duration::from_secs(env_parse(
-                "OUTBOX_RELAY_STALE_LOCK_CHECK_INTERVAL_SECS",
-                30,
-            )),
-            stale_lock_timeout: Duration::from_secs(env_parse(
-                "OUTBOX_RELAY_STALE_LOCK_TIMEOUT_SECS",
-                60,
-            )),
-            cleanup_interval: Duration::from_secs(env_parse(
-                "OUTBOX_RELAY_CLEANUP_INTERVAL_SECS",
-                3600,
-            )),
-            cleanup_max_age: Duration::from_secs(env_parse(
-                "OUTBOX_RELAY_CLEANUP_MAX_AGE_SECS",
-                7 * 24 * 3600,
-            )),
+            batch_size,
+            poll_interval: Duration::from_millis(poll_interval_ms),
+            stale_lock_check_interval: Duration::from_secs(stale_lock_check_secs),
+            stale_lock_timeout: Duration::from_secs(stale_lock_timeout_secs),
+            cleanup_interval: Duration::from_secs(cleanup_interval_secs),
+            cleanup_max_age: Duration::from_secs(cleanup_max_age_secs),
             delete_on_publish: env_parse("OUTBOX_RELAY_DELETE_ON_PUBLISH", false),
             failure_escalation: None,
         }

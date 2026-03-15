@@ -2,8 +2,10 @@ use crate::categories::dtos::{ValidCreateCategoryReq, ValidUpdateCategoryReq};
 use crate::categories::entities::CategoryEntity;
 use crate::categories::value_objects::CategoryId;
 use shared::db::PgExec;
+use shared::db::pagination_support::{PaginationParams, keyset_paginate};
 use shared::errors::AppError;
-use sqlx::PgConnection;
+use sqlx::postgres::Postgres;
+use sqlx::{PgConnection, QueryBuilder};
 
 pub async fn get_category_by_id<'e>(
     executor: impl PgExec<'e>,
@@ -35,25 +37,33 @@ pub async fn get_category_by_slug<'e>(
 
 pub async fn list_root_categories<'e>(
     executor: impl PgExec<'e>,
+    params: &PaginationParams,
 ) -> Result<Vec<CategoryEntity>, AppError> {
-    sqlx::query_as::<_, CategoryEntity>(
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
-         FROM categories WHERE parent_id IS NULL ORDER BY name ASC",
-    )
+         FROM categories WHERE parent_id IS NULL",
+    );
+    keyset_paginate(params, None, &mut qb);
+    qb.build_query_as::<CategoryEntity>()
         .fetch_all(executor)
         .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to list root categories: {}", e)))
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to list root categories: {}", e))
+        })
 }
 
 pub async fn get_children<'e>(
     executor: impl PgExec<'e>,
     parent_id: CategoryId,
+    params: &PaginationParams,
 ) -> Result<Vec<CategoryEntity>, AppError> {
-    sqlx::query_as::<_, CategoryEntity>(
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
-         FROM categories WHERE parent_id = $1 ORDER BY name ASC",
-    )
-        .bind(parent_id.value())
+         FROM categories WHERE parent_id = ",
+    );
+    qb.push_bind(parent_id.value());
+    keyset_paginate(params, None, &mut qb);
+    qb.build_query_as::<CategoryEntity>()
         .fetch_all(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to list children: {}", e)))
@@ -66,7 +76,7 @@ pub async fn get_subtree<'e>(
 ) -> Result<Vec<CategoryEntity>, AppError> {
     sqlx::query_as::<_, CategoryEntity>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
-         FROM categories WHERE path <@ $1::ltree ORDER BY path ASC",
+         FROM categories WHERE path <@ $1::ltree ORDER BY path ASC LIMIT 200",
     )
         .bind(path)
         .fetch_all(executor)
@@ -81,7 +91,7 @@ pub async fn get_ancestors<'e>(
 ) -> Result<Vec<CategoryEntity>, AppError> {
     sqlx::query_as::<_, CategoryEntity>(
         "SELECT id, created_at, updated_at, name, slug, path::text as path, parent_id, depth, description
-         FROM categories WHERE path @> $1::ltree ORDER BY depth ASC",
+         FROM categories WHERE path @> $1::ltree ORDER BY depth ASC LIMIT 50",
     )
         .bind(path)
         .fetch_all(executor)
@@ -95,6 +105,13 @@ pub async fn create_category(
     path: &str,
     depth: i32,
 ) -> Result<CategoryId, AppError> {
+    debug_assert!(depth >= 0, "Category depth must be non-negative");
+    debug_assert_eq!(
+        path.matches('.').count() as i32,
+        depth,
+        "Depth must equal number of dots in ltree path"
+    );
+
     let row: (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO categories (name, slug, path, parent_id, depth, description)
          VALUES ($1, $2, $3::ltree, $4, $5, $6)
@@ -118,47 +135,39 @@ pub async fn update_category(
     id: CategoryId,
     req: ValidUpdateCategoryReq,
 ) -> Result<(), AppError> {
-    let mut set_parts: Vec<String> = Vec::new();
-    let mut param_idx = 2u32; // $1 is the id
-
-    if req.name.is_some() {
-        set_parts.push(format!("name = ${}", param_idx));
-        param_idx += 1;
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE categories SET ");
+    let mut fields = 0usize;
+    {
+        let mut sep = qb.separated(", ");
+        if let Some(ref name) = req.name {
+            sep.push("name = ").push_bind_unseparated(name.as_str());
+            fields += 1;
+        }
+        if let Some(ref description) = req.description {
+            sep.push("description = ")
+                .push_bind_unseparated(description.clone());
+            fields += 1;
+        }
+        if fields == 0 {
+            return Ok(());
+        }
+        sep.push("updated_at = NOW()");
     }
-    if req.description.is_some() {
-        set_parts.push(format!("description = ${}", param_idx));
-        param_idx += 1;
-    }
+    qb.push(" WHERE id = ").push_bind(id.value());
 
-    if set_parts.is_empty() {
-        return Ok(());
-    }
-
-    set_parts.push("updated_at = NOW()".to_string());
-    let _ = param_idx;
-
-    let sql = format!(
-        "UPDATE categories SET {} WHERE id = $1",
-        set_parts.join(", ")
-    );
-
-    let mut query = sqlx::query(&sql).bind(id.value());
-
-    if let Some(ref name) = req.name {
-        query = query.bind(name.as_str());
-    }
-    if let Some(ref description) = req.description {
-        query = query.bind(description);
-    }
-
-    let result = query
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to update category: {}", e)))?;
+    let result =
+        qb.build().execute(&mut *tx).await.map_err(|e| {
+            AppError::InternalServerError(format!("Failed to update category: {}", e))
+        })?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Category not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -173,6 +182,11 @@ pub async fn delete_category(tx: &mut PgConnection, id: CategoryId) -> Result<()
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Category not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "DELETE must affect exactly 1 row"
+    );
 
     Ok(())
 }

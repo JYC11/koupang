@@ -1,3 +1,4 @@
+use shared::db::pagination_support::HasId;
 use sqlx::FromRow;
 use sqlx::types::Uuid;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -11,6 +12,12 @@ pub struct BrandEntity {
     pub slug: String,
     pub description: Option<String>,
     pub logo_url: Option<String>,
+}
+
+impl HasId for BrandEntity {
+    fn id(&self) -> Uuid {
+        self.id
+    }
 }
 
 #[derive(Debug, Clone, FromRow)]

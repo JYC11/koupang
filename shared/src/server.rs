@@ -126,6 +126,7 @@ impl ServiceBuilder {
             .unwrap_or_else(|_| grpc_config.default_port.to_string())
             .parse()
             .expect("gRPC port must be a valid u16");
+        assert!(grpc_port > 0, "gRPC port must be positive");
         let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
         let infra = self.init_infra().await;
@@ -155,10 +156,12 @@ impl ServiceBuilder {
     }
 
     fn parse_http_port(&self) -> u16 {
-        std::env::var(self.http_port_env)
+        let port: u16 = std::env::var(self.http_port_env)
             .unwrap_or_else(|_| "3000".to_string())
             .parse()
-            .expect("HTTP port must be a valid u16")
+            .expect("HTTP port must be a valid u16");
+        assert!(port > 0, "HTTP port must be positive");
+        port
     }
 }
 

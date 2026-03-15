@@ -5,7 +5,6 @@ use crate::products::dtos::{
     ValidUpdateProductReq, ValidUpdateSkuReq,
 };
 use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
-use crate::products::repository;
 use crate::products::value_objects::{ProductId, ProductImageId, SkuId};
 use shared::db::pagination_support::{PaginationParams, keyset_paginate};
 use shared::db::{PgExec, PgPool};
@@ -82,7 +81,7 @@ fn apply_product_filters(qb: &mut QueryBuilder<Postgres>, filter: &ProductFilter
     }
     if let Some(ref search) = filter.search {
         qb.push(" AND p.name ILIKE '%' || ");
-        qb.push_bind(search.clone());
+        qb.push_bind(search.as_str().to_string());
         qb.push(" || '%'");
     }
     if let Some(ref status) = filter.status {
@@ -224,90 +223,69 @@ pub async fn update_product(
     id: ProductId,
     req: ValidUpdateProductReq,
 ) -> Result<(), AppError> {
-    // Build dynamic SET clause for partial updates
-    let mut set_parts: Vec<String> = Vec::new();
-    let mut param_idx = 2u32; // $1 is the id
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE products SET ");
+    let mut fields = 0usize;
+    {
+        let mut sep = qb.separated(", ");
+        if let Some(ref name) = req.name {
+            sep.push("name = ").push_bind_unseparated(name.as_str());
+            fields += 1;
+        }
+        if let Some(ref slug) = req.slug {
+            sep.push("slug = ").push_bind_unseparated(slug.as_str());
+            fields += 1;
+        }
+        if let Some(ref description) = req.description {
+            sep.push("description = ")
+                .push_bind_unseparated(description.clone());
+            fields += 1;
+        }
+        if let Some(ref base_price) = req.base_price {
+            sep.push("base_price = ")
+                .push_bind_unseparated(base_price.value());
+            fields += 1;
+        }
+        if let Some(ref currency) = req.currency {
+            sep.push("currency = ")
+                .push_bind_unseparated(currency.as_str());
+            fields += 1;
+        }
+        if let Some(ref category_id) = req.category_id {
+            sep.push("category_id = ")
+                .push_bind_unseparated(category_id.value());
+            fields += 1;
+        }
+        if let Some(ref brand_id) = req.brand_id {
+            sep.push("brand_id = ")
+                .push_bind_unseparated(brand_id.value());
+            fields += 1;
+        }
+        if let Some(ref status) = req.status {
+            sep.push("status = ")
+                .push_bind_unseparated(status.as_str().to_string());
+            fields += 1;
+        }
+        if fields == 0 {
+            return Ok(());
+        }
+        sep.push("updated_at = NOW()");
+    }
+    qb.push(" WHERE id = ").push_bind(id.value());
+    qb.push(" AND deleted_at IS NULL");
 
-    if req.name.is_some() {
-        set_parts.push(format!("name = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.slug.is_some() {
-        set_parts.push(format!("slug = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.description.is_some() {
-        set_parts.push(format!("description = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.base_price.is_some() {
-        set_parts.push(format!("base_price = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.currency.is_some() {
-        set_parts.push(format!("currency = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.category_id.is_some() {
-        set_parts.push(format!("category_id = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.brand_id.is_some() {
-        set_parts.push(format!("brand_id = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.status.is_some() {
-        set_parts.push(format!("status = ${}", param_idx));
-        param_idx += 1;
-    }
-
-    if set_parts.is_empty() {
-        return Ok(());
-    }
-
-    set_parts.push("updated_at = NOW()".to_string());
-    let _ = param_idx;
-
-    let sql = format!(
-        "UPDATE products SET {} WHERE id = $1 AND deleted_at IS NULL",
-        set_parts.join(", ")
-    );
-
-    let mut query = sqlx::query(&sql).bind(id.value());
-
-    if let Some(ref name) = req.name {
-        query = query.bind(name.as_str());
-    }
-    if let Some(ref slug) = req.slug {
-        query = query.bind(slug.as_str());
-    }
-    if let Some(ref description) = req.description {
-        query = query.bind(description);
-    }
-    if let Some(ref base_price) = req.base_price {
-        query = query.bind(base_price.value());
-    }
-    if let Some(ref currency) = req.currency {
-        query = query.bind(currency.as_str());
-    }
-    if let Some(ref category_id) = req.category_id {
-        query = query.bind(category_id.value());
-    }
-    if let Some(ref brand_id) = req.brand_id {
-        query = query.bind(brand_id.value());
-    }
-    if let Some(ref status) = req.status {
-        query = query.bind(status.as_str());
-    }
-
-    let result = query
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| AppError::InternalServerError(format!("Failed to update product: {}", e)))?;
+    let result =
+        qb.build().execute(&mut *tx).await.map_err(|e| {
+            AppError::InternalServerError(format!("Failed to update product: {}", e))
+        })?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Product not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -325,6 +303,11 @@ pub async fn delete_product(tx: &mut PgConnection, id: ProductId) -> Result<(), 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Product not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "DELETE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -347,7 +330,7 @@ pub async fn list_skus_by_product<'e>(
     product_id: ProductId,
 ) -> Result<Vec<SkuEntity>, AppError> {
     sqlx::query_as::<_, SkuEntity>(
-        "SELECT * FROM skus WHERE product_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC",
+        "SELECT * FROM skus WHERE product_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 100",
     )
     .bind(product_id.value())
     .fetch_all(executor)
@@ -382,54 +365,39 @@ pub async fn update_sku(
     id: SkuId,
     req: ValidUpdateSkuReq,
 ) -> Result<(), AppError> {
-    let mut set_parts: Vec<String> = Vec::new();
-    let mut param_idx = 2u32;
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE skus SET ");
+    let mut fields = 0usize;
+    {
+        let mut sep = qb.separated(", ");
+        if let Some(ref price) = req.price {
+            sep.push("price = ").push_bind_unseparated(price.value());
+            fields += 1;
+        }
+        if let Some(ref stock_quantity) = req.stock_quantity {
+            sep.push("stock_quantity = ")
+                .push_bind_unseparated(stock_quantity.value());
+            fields += 1;
+        }
+        if let Some(ref attributes) = req.attributes {
+            sep.push("attributes = ")
+                .push_bind_unseparated(attributes.clone());
+            fields += 1;
+        }
+        if let Some(ref status) = req.status {
+            sep.push("status = ")
+                .push_bind_unseparated(status.as_str().to_string());
+            fields += 1;
+        }
+        if fields == 0 {
+            return Ok(());
+        }
+        sep.push("updated_at = NOW()");
+    }
+    qb.push(" WHERE id = ").push_bind(id.value());
+    qb.push(" AND deleted_at IS NULL");
 
-    if req.price.is_some() {
-        set_parts.push(format!("price = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.stock_quantity.is_some() {
-        set_parts.push(format!("stock_quantity = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.attributes.is_some() {
-        set_parts.push(format!("attributes = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.status.is_some() {
-        set_parts.push(format!("status = ${}", param_idx));
-        param_idx += 1;
-    }
-
-    if set_parts.is_empty() {
-        return Ok(());
-    }
-
-    set_parts.push("updated_at = NOW()".to_string());
-    let _ = param_idx;
-
-    let sql = format!(
-        "UPDATE skus SET {} WHERE id = $1 AND deleted_at IS NULL",
-        set_parts.join(", ")
-    );
-
-    let mut query = sqlx::query(&sql).bind(id.value());
-
-    if let Some(ref price) = req.price {
-        query = query.bind(price.value());
-    }
-    if let Some(ref stock_quantity) = req.stock_quantity {
-        query = query.bind(stock_quantity.value());
-    }
-    if let Some(ref attributes) = req.attributes {
-        query = query.bind(attributes);
-    }
-    if let Some(ref status) = req.status {
-        query = query.bind(status.as_str());
-    }
-
-    let result = query
+    let result = qb
+        .build()
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update SKU: {}", e)))?;
@@ -437,6 +405,11 @@ pub async fn update_sku(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("SKU not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -452,6 +425,11 @@ pub async fn delete_sku(tx: &mut PgConnection, id: SkuId) -> Result<(), AppError
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("SKU not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "DELETE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -478,18 +456,34 @@ pub async fn adjust_stock(
             "SKU not found or insufficient stock".to_string(),
         ));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
 
 // ── Image queries ───────────────────────────────────────────
 
+pub async fn get_image_by_id<'e>(
+    executor: impl PgExec<'e>,
+    id: ProductImageId,
+) -> Result<ProductImageEntity, AppError> {
+    sqlx::query_as::<_, ProductImageEntity>("SELECT * FROM product_images WHERE id = $1")
+        .bind(id.value())
+        .fetch_one(executor)
+        .await
+        .map_err(|e| AppError::NotFound(format!("Image not found: {}", e)))
+}
+
 pub async fn list_images_by_product<'e>(
     executor: impl PgExec<'e>,
     product_id: ProductId,
 ) -> Result<Vec<ProductImageEntity>, AppError> {
     sqlx::query_as::<_, ProductImageEntity>(
-        "SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC",
+        "SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC LIMIT 50",
     )
     .bind(product_id.value())
     .fetch_all(executor)

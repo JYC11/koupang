@@ -320,13 +320,7 @@ pub async fn add_image(
 
     state.cache.evict(&product_detail_key(product_id)).await;
 
-    // Fetch the newly created image for response
-    let images = repository::list_images_by_product(&state.pool, product_id).await?;
-    let image = images
-        .into_iter()
-        .find(|img| img.id == image_id.value())
-        .ok_or_else(|| AppError::InternalServerError("Image not found after insert".to_string()))?;
-
+    let image = repository::get_image_by_id(&state.pool, image_id).await?;
     Ok(ProductImageRes::new(image))
 }
 

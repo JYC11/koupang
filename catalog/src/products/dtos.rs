@@ -2,7 +2,8 @@ use crate::brands::value_objects::BrandId;
 use crate::categories::value_objects::CategoryId;
 use crate::products::entities::{ProductEntity, ProductImageEntity, ProductListEntity, SkuEntity};
 use crate::products::value_objects::{
-    Currency, ImageUrl, Price, ProductName, ProductStatus, SkuCode, SkuStatus, Slug, StockQuantity,
+    Currency, ImageUrl, Price, ProductName, ProductStatus, SearchQuery, SkuCode, SkuStatus, Slug,
+    StockQuantity,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -34,12 +35,13 @@ impl ProductFilterQuery {
             cursor: self.cursor,
             direction: self.direction,
         };
+        let search = self.search.and_then(|s| SearchQuery::new(&s).ok());
         let filter = ProductFilter {
             category_id: self.category_id,
             brand_id: self.brand_id,
             min_price: self.min_price,
             max_price: self.max_price,
-            search: self.search,
+            search,
             status: self.status,
         };
         (pagination.into_params(), filter)
@@ -51,7 +53,7 @@ pub struct ProductFilter {
     pub brand_id: Option<Uuid>,
     pub min_price: Option<Decimal>,
     pub max_price: Option<Decimal>,
-    pub search: Option<String>,
+    pub search: Option<SearchQuery>,
     pub status: Option<ProductStatus>,
 }
 

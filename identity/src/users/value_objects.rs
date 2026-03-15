@@ -56,6 +56,12 @@ pub struct Password(String);
 
 impl Password {
     pub fn new(input: &str) -> Result<Self, AppError> {
+        if input.len() > 128 {
+            return Err(AppError::BadRequest(
+                "Password must not exceed 128 characters".to_string(),
+            ));
+        }
+
         let mut missing = Vec::new();
 
         if input.len() < 8 {
@@ -299,6 +305,20 @@ mod tests {
         assert!(msg.contains("uppercase"));
         assert!(msg.contains("digit"));
         assert!(msg.contains("special character"));
+    }
+
+    #[test]
+    fn password_rejects_too_long() {
+        // 129 chars with all requirements met
+        let long = format!("Aa1!{}", "a".repeat(125));
+        assert!(Password::new(&long).is_err());
+    }
+
+    #[test]
+    fn password_accepts_max_length() {
+        // Exactly 128 chars
+        let max = format!("Aa1!{}", "a".repeat(124));
+        assert!(Password::new(&max).is_ok());
     }
 
     #[test]

@@ -4,8 +4,10 @@ use crate::brands::value_objects::BrandId;
 use crate::categories::entities::CategoryEntity;
 use crate::categories::value_objects::CategoryId;
 use shared::db::PgExec;
+use shared::db::pagination_support::{PaginationParams, keyset_paginate};
 use shared::errors::AppError;
-use sqlx::PgConnection;
+use sqlx::postgres::Postgres;
+use sqlx::{PgConnection, QueryBuilder};
 
 // ── Brand queries ──────────────────────────────────────────
 
@@ -31,8 +33,13 @@ pub async fn get_brand_by_slug<'e>(
         .map_err(|e| AppError::NotFound(format!("Brand not found: {}", e)))
 }
 
-pub async fn list_brands<'e>(executor: impl PgExec<'e>) -> Result<Vec<BrandEntity>, AppError> {
-    sqlx::query_as::<_, BrandEntity>("SELECT * FROM brands ORDER BY name ASC")
+pub async fn list_brands<'e>(
+    executor: impl PgExec<'e>,
+    params: &PaginationParams,
+) -> Result<Vec<BrandEntity>, AppError> {
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("SELECT * FROM brands WHERE 1=1");
+    keyset_paginate(params, None, &mut qb);
+    qb.build_query_as::<BrandEntity>()
         .fetch_all(executor)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to list brands: {}", e)))
@@ -63,44 +70,33 @@ pub async fn update_brand(
     id: BrandId,
     req: ValidUpdateBrandReq,
 ) -> Result<(), AppError> {
-    let mut set_parts: Vec<String> = Vec::new();
-    let mut param_idx = 2u32;
-
-    if req.name.is_some() {
-        set_parts.push(format!("name = ${}", param_idx));
-        param_idx += 1;
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE brands SET ");
+    let mut fields = 0usize;
+    {
+        let mut sep = qb.separated(", ");
+        if let Some(ref name) = req.name {
+            sep.push("name = ").push_bind_unseparated(name.as_str());
+            fields += 1;
+        }
+        if let Some(ref description) = req.description {
+            sep.push("description = ")
+                .push_bind_unseparated(description.clone());
+            fields += 1;
+        }
+        if let Some(ref logo_url) = req.logo_url {
+            sep.push("logo_url = ")
+                .push_bind_unseparated(logo_url.as_str());
+            fields += 1;
+        }
+        if fields == 0 {
+            return Ok(());
+        }
+        sep.push("updated_at = NOW()");
     }
-    if req.description.is_some() {
-        set_parts.push(format!("description = ${}", param_idx));
-        param_idx += 1;
-    }
-    if req.logo_url.is_some() {
-        set_parts.push(format!("logo_url = ${}", param_idx));
-        param_idx += 1;
-    }
+    qb.push(" WHERE id = ").push_bind(id.value());
 
-    if set_parts.is_empty() {
-        return Ok(());
-    }
-
-    set_parts.push("updated_at = NOW()".to_string());
-    let _ = param_idx;
-
-    let sql = format!("UPDATE brands SET {} WHERE id = $1", set_parts.join(", "));
-
-    let mut query = sqlx::query(&sql).bind(id.value());
-
-    if let Some(ref name) = req.name {
-        query = query.bind(name.as_str());
-    }
-    if let Some(ref description) = req.description {
-        query = query.bind(description);
-    }
-    if let Some(ref logo_url) = req.logo_url {
-        query = query.bind(logo_url.as_str());
-    }
-
-    let result = query
+    let result = qb
+        .build()
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to update brand: {}", e)))?;
@@ -108,6 +104,11 @@ pub async fn update_brand(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Brand not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -122,6 +123,11 @@ pub async fn delete_brand(tx: &mut PgConnection, id: BrandId) -> Result<(), AppE
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Brand not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "DELETE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -147,7 +153,7 @@ pub async fn associate_category(
     brand_id: BrandId,
     category_id: CategoryId,
 ) -> Result<(), AppError> {
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO brand_categories (brand_id, category_id) VALUES ($1, $2)
          ON CONFLICT DO NOTHING",
     )
@@ -157,6 +163,10 @@ pub async fn associate_category(
     .await
     .map_err(|e| AppError::InternalServerError(format!("Failed to associate category: {}", e)))?;
 
+    debug_assert!(
+        result.rows_affected() <= 1,
+        "INSERT ON CONFLICT must affect 0 or 1 rows"
+    );
     Ok(())
 }
 
@@ -188,19 +198,21 @@ pub async fn disassociate_category(
 pub async fn list_categories_for_brand<'e>(
     executor: impl PgExec<'e>,
     brand_id: BrandId,
+    params: &PaginationParams,
 ) -> Result<Vec<CategoryEntity>, AppError> {
-    sqlx::query_as::<_, CategoryEntity>(
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT c.id, c.created_at, c.updated_at, c.name, c.slug, c.path::text as path,
                 c.parent_id, c.depth, c.description
          FROM categories c
          INNER JOIN brand_categories bc ON bc.category_id = c.id
-         WHERE bc.brand_id = $1
-         ORDER BY c.name ASC",
-    )
-    .bind(brand_id.value())
-    .fetch_all(executor)
-    .await
-    .map_err(|e| {
-        AppError::InternalServerError(format!("Failed to list categories for brand: {}", e))
-    })
+         WHERE bc.brand_id = ",
+    );
+    qb.push_bind(brand_id.value());
+    keyset_paginate(params, Some("c"), &mut qb);
+    qb.build_query_as::<CategoryEntity>()
+        .fetch_all(executor)
+        .await
+        .map_err(|e| {
+            AppError::InternalServerError(format!("Failed to list categories for brand: {}", e))
+        })
 }

@@ -59,7 +59,7 @@ pub async fn create_verification_token(
     token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO email_verification_tokens (user_id, token, expires_at)
              VALUES ($1, $2, $3)",
     )
@@ -72,6 +72,11 @@ pub async fn create_verification_token(
         AppError::InternalServerError(format!("Failed to create verification token: {}", e))
     })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "INSERT must affect exactly 1 row"
+    );
     Ok(())
 }
 
@@ -93,7 +98,7 @@ pub async fn mark_token_used(
     tx: &mut PgConnection,
     token_id: EmailTokenId,
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1")
+    let result = sqlx::query("UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1")
         .bind(token_id.value())
         .execute(&mut *tx)
         .await
@@ -101,18 +106,29 @@ pub async fn mark_token_used(
             AppError::InternalServerError(format!("Failed to mark token as used: {}", e))
         })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
     Ok(())
 }
 
 pub async fn verify_user_email(tx: &mut PgConnection, user_id: UserId) -> Result<(), AppError> {
-    sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
-        .bind(user_id.value())
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            AppError::InternalServerError(format!("Failed to verify user email: {}", e))
-        })?;
+    let result =
+        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
+            .bind(user_id.value())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                AppError::InternalServerError(format!("Failed to verify user email: {}", e))
+            })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
     Ok(())
 }
 
@@ -138,6 +154,11 @@ pub async fn update_user(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("User not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -153,6 +174,11 @@ pub async fn delete_user(tx: &mut PgConnection, id: UserId) -> Result<(), AppErr
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("User not found".to_string()));
     }
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "DELETE must affect exactly 1 row"
+    );
 
     Ok(())
 }
@@ -176,7 +202,7 @@ pub async fn create_password_reset_token(
     token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO password_reset_tokens (user_id, token, expires_at)
              VALUES ($1, $2, $3)",
     )
@@ -189,6 +215,11 @@ pub async fn create_password_reset_token(
         AppError::InternalServerError(format!("Failed to create password reset token: {}", e))
     })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "INSERT must affect exactly 1 row"
+    );
     Ok(())
 }
 
@@ -210,7 +241,7 @@ pub async fn mark_reset_token_used(
     tx: &mut PgConnection,
     token_id: PasswordTokenId,
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1")
+    let result = sqlx::query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1")
         .bind(token_id.value())
         .execute(&mut *tx)
         .await
@@ -218,6 +249,11 @@ pub async fn mark_reset_token_used(
             AppError::InternalServerError(format!("Failed to mark reset token as used: {}", e))
         })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
     Ok(())
 }
 
@@ -226,7 +262,7 @@ pub async fn update_user_password(
     user_id: UserId,
     hashed_password: &str,
 ) -> Result<(), AppError> {
-    sqlx::query("UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2")
+    let result = sqlx::query("UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2")
         .bind(hashed_password)
         .bind(user_id.value())
         .execute(&mut *tx)
@@ -235,5 +271,10 @@ pub async fn update_user_password(
             AppError::InternalServerError(format!("Failed to update user password: {}", e))
         })?;
 
+    assert_eq!(
+        result.rows_affected(),
+        1,
+        "UPDATE must affect exactly 1 row"
+    );
     Ok(())
 }

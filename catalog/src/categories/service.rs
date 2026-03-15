@@ -7,6 +7,7 @@ use crate::categories::repository;
 use crate::categories::value_objects::CategoryId;
 use shared::auth::guards::require_admin;
 use shared::auth::jwt::CurrentUser;
+use shared::db::pagination_support::{PaginationParams, PaginationRes, get_cursors};
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 
@@ -20,11 +21,17 @@ pub async fn create_category(
     let validated: ValidCreateCategoryReq = req.try_into()?;
 
     // Compute path and depth from parent
+    const MAX_CATEGORY_DEPTH: i32 = 10;
     let (path, depth) = match validated.parent_id {
         Some(parent_id) => {
             let parent = repository::get_category_by_id(&state.pool, parent_id).await?;
-            let path = format!("{}.{}", parent.path, validated.label.as_str());
             let depth = parent.depth + 1;
+            if depth > MAX_CATEGORY_DEPTH {
+                return Err(AppError::BadRequest(format!(
+                    "Category depth must not exceed {MAX_CATEGORY_DEPTH}"
+                )));
+            }
+            let path = format!("{}.{}", parent.path, validated.label.as_str());
             (path, depth)
         }
         None => (validated.label.as_str().to_string(), 0),
@@ -55,16 +62,27 @@ pub async fn get_category_by_slug(state: &AppState, slug: &str) -> Result<Catego
     Ok(CategoryRes::new(category))
 }
 
-pub async fn list_root_categories(state: &AppState) -> Result<Vec<CategoryRes>, AppError> {
-    let categories = repository::list_root_categories(&state.pool).await?;
-    Ok(categories.into_iter().map(CategoryRes::new).collect())
+pub async fn list_root_categories(
+    state: &AppState,
+    params: PaginationParams,
+) -> Result<PaginationRes<CategoryRes>, AppError> {
+    let mut categories = repository::list_root_categories(&state.pool, &params).await?;
+    let cursors = get_cursors(&params, &mut categories);
+    let items = categories.into_iter().map(CategoryRes::new).collect();
+    Ok(PaginationRes::new(items, cursors))
 }
 
-pub async fn get_children(state: &AppState, id: CategoryId) -> Result<Vec<CategoryRes>, AppError> {
+pub async fn get_children(
+    state: &AppState,
+    id: CategoryId,
+    params: PaginationParams,
+) -> Result<PaginationRes<CategoryRes>, AppError> {
     // Verify parent exists
     repository::get_category_by_id(&state.pool, id).await?;
-    let children = repository::get_children(&state.pool, id).await?;
-    Ok(children.into_iter().map(CategoryRes::new).collect())
+    let mut children = repository::get_children(&state.pool, id, &params).await?;
+    let cursors = get_cursors(&params, &mut children);
+    let items = children.into_iter().map(CategoryRes::new).collect();
+    Ok(PaginationRes::new(items, cursors))
 }
 
 pub async fn get_subtree(state: &AppState, id: CategoryId) -> Result<Vec<CategoryRes>, AppError> {

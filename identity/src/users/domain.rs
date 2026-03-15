@@ -2,7 +2,6 @@ use crate::users::entities::UserEntity;
 use crate::users::value_objects::{Email, Password, Phone, UserId, Username};
 use shared::auth::Role;
 use shared::errors::AppError;
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct User {

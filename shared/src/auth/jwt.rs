@@ -90,6 +90,10 @@ pub fn generate_access_token(
         iat: now,
         exp: now + config.access_token_expiry_secs as i64,
     };
+    debug_assert!(
+        claims.exp > claims.iat,
+        "Token expiry must be after issued time"
+    );
 
     let header = Header::new(Algorithm::HS256);
     let encoding_key = EncodingKey::from_secret(&config.access_token_secret);
@@ -108,6 +112,10 @@ pub fn generate_refresh_token(config: &AuthConfig, user_id: &Uuid) -> Result<Str
         iat: now,
         exp: now + config.refresh_token_expiry_secs as i64,
     };
+    debug_assert!(
+        claims.exp > claims.iat,
+        "Token expiry must be after issued time"
+    );
 
     let header = Header::new(Algorithm::HS256);
     let encoding_key = EncodingKey::from_secret(&config.refresh_token_secret);

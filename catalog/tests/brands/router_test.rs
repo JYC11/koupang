@@ -7,6 +7,7 @@ use axum::http::{Request, StatusCode};
 use catalog::app;
 use catalog::brands::dtos::{BrandRes, CreateBrandReq};
 use catalog::categories::dtos::CategoryRes;
+use shared::db::pagination_support::PaginatedResponse;
 use shared::test_utils::http::{authed_delete, authed_json_request, body_bytes, body_json};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -59,8 +60,9 @@ async fn list_brands_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let brands: Vec<BrandRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(brands.len(), 2);
+    let page: PaginatedResponse<BrandRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(page.items.len(), 2);
 }
 
 #[tokio::test]
@@ -159,9 +161,10 @@ async fn list_categories_for_brand_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(categories.len(), 1);
-    assert_eq!(categories[0].name, "Electronics");
+    let page: PaginatedResponse<CategoryRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].name, "Electronics");
 }
 
 // ── Protected endpoints ─────────────────────────────────────
@@ -288,8 +291,9 @@ async fn associate_category_via_router() {
         )
         .await
         .unwrap();
-    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(categories.len(), 1);
+    let page: PaginatedResponse<CategoryRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(page.items.len(), 1);
 }
 
 #[tokio::test]
@@ -330,6 +334,7 @@ async fn disassociate_category_via_router() {
         )
         .await
         .unwrap();
-    let categories: Vec<CategoryRes> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert!(categories.is_empty());
+    let page: PaginatedResponse<CategoryRes> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert!(page.items.is_empty());
 }

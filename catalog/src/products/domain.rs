@@ -2,6 +2,7 @@ use crate::products::entities::{ProductEntity, SkuEntity};
 use crate::products::value_objects::{
     Currency, Price, ProductName, ProductStatus, SkuCode, Slug, StockQuantity,
 };
+use rust_decimal::Decimal;
 use shared::errors::AppError;
 use uuid::Uuid;
 
@@ -22,6 +23,11 @@ impl TryFrom<ProductEntity> for Product {
     type Error = AppError;
 
     fn try_from(value: ProductEntity) -> Result<Self, Self::Error> {
+        debug_assert!(
+            value.base_price >= Decimal::ZERO,
+            "DB price must be non-negative"
+        );
+
         Ok(Self {
             id: value.id,
             name: ProductName::new(&*value.name)?,
@@ -51,6 +57,15 @@ impl TryFrom<(Uuid, SkuEntity)> for Sku {
 
     fn try_from(value: (Uuid, SkuEntity)) -> Result<Self, Self::Error> {
         let (product_id, entity) = value;
+        debug_assert!(
+            entity.price >= Decimal::ZERO,
+            "DB SKU price must be non-negative"
+        );
+        debug_assert!(
+            entity.stock_quantity >= 0,
+            "DB stock_quantity must be non-negative"
+        );
+
         Ok(Self {
             id: entity.id,
             product_id,

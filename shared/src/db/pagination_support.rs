@@ -23,7 +23,8 @@ impl PaginationQuery {
 
 // ── JSON response wrapper ───────────────────────────────────
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 pub struct PaginatedResponse<T: Serialize> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,

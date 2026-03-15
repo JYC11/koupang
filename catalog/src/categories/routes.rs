@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -12,6 +12,7 @@ use crate::categories::service;
 use crate::categories::value_objects::CategoryId;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
+use shared::db::pagination_support::{PaginatedResponse, PaginationQuery};
 use shared::errors::AppError;
 use shared::responses;
 
@@ -43,9 +44,11 @@ pub fn category_routes(app_state: AppState) -> Router {
 
 async fn list_root_categories(
     State(state): State<AppState>,
-) -> Result<Json<Vec<CategoryRes>>, AppError> {
-    let categories = service::list_root_categories(&state).await?;
-    Ok(Json(categories))
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<PaginatedResponse<CategoryRes>>, AppError> {
+    let params = query.into_params();
+    let result = service::list_root_categories(&state, params).await?;
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn get_category(
@@ -68,10 +71,12 @@ async fn get_category_by_slug(
 async fn get_children(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<PaginatedResponse<CategoryRes>>, AppError> {
     let id = CategoryId::new(id);
-    let children = service::get_children(&state, id).await?;
-    Ok(Json(children))
+    let params = query.into_params();
+    let result = service::get_children(&state, id, params).await?;
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn get_subtree(

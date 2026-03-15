@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod domain;
 pub mod dtos;
 pub mod entities;

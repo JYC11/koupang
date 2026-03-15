@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -14,6 +14,7 @@ use crate::categories::dtos::CategoryRes;
 use crate::categories::value_objects::CategoryId;
 use shared::auth::jwt::CurrentUser;
 use shared::auth::middleware::AuthMiddleware;
+use shared::db::pagination_support::{PaginatedResponse, PaginationQuery};
 use shared::errors::AppError;
 use shared::responses;
 
@@ -46,9 +47,13 @@ pub fn brand_routes(app_state: AppState) -> Router {
 
 // ── Handlers ───────────────────────────────────────────────
 
-async fn list_brands(State(state): State<AppState>) -> Result<Json<Vec<BrandRes>>, AppError> {
-    let brands = service::list_brands(&state).await?;
-    Ok(Json(brands))
+async fn list_brands(
+    State(state): State<AppState>,
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<PaginatedResponse<BrandRes>>, AppError> {
+    let params = query.into_params();
+    let result = service::list_brands(&state, params).await?;
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn get_brand(
@@ -109,10 +114,12 @@ async fn delete_brand(
 async fn list_categories_for_brand(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<CategoryRes>>, AppError> {
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<PaginatedResponse<CategoryRes>>, AppError> {
     let id = BrandId::new(id);
-    let categories = service::list_categories_for_brand(&state, id).await?;
-    Ok(Json(categories))
+    let params = query.into_params();
+    let result = service::list_categories_for_brand(&state, id, params).await?;
+    Ok(Json(PaginatedResponse::new(result)))
 }
 
 async fn associate_category(
