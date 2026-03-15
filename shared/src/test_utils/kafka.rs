@@ -34,9 +34,7 @@ impl SharedKafkaContainer {
                 }
                 Err(e) => {
                     last_err = format!("{e}");
-                    eprintln!(
-                        "[TestKafka] attempt {attempt}/3 failed: {last_err}, retrying..."
-                    );
+                    eprintln!("[TestKafka] attempt {attempt}/3 failed: {last_err}, retrying...");
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
             }

@@ -49,10 +49,8 @@ impl RelayConfig {
         let poll_interval_ms: u64 = parse_env_or("OUTBOX_RELAY_POLL_INTERVAL_MS", 500);
         let stale_lock_check_secs: u64 =
             parse_env_or("OUTBOX_RELAY_STALE_LOCK_CHECK_INTERVAL_SECS", 30);
-        let stale_lock_timeout_secs: u64 =
-            parse_env_or("OUTBOX_RELAY_STALE_LOCK_TIMEOUT_SECS", 60);
-        let cleanup_interval_secs: u64 =
-            parse_env_or("OUTBOX_RELAY_CLEANUP_INTERVAL_SECS", 3600);
+        let stale_lock_timeout_secs: u64 = parse_env_or("OUTBOX_RELAY_STALE_LOCK_TIMEOUT_SECS", 60);
+        let cleanup_interval_secs: u64 = parse_env_or("OUTBOX_RELAY_CLEANUP_INTERVAL_SECS", 3600);
         let cleanup_max_age_secs: u64 =
             parse_env_or("OUTBOX_RELAY_CLEANUP_MAX_AGE_SECS", 7 * 24 * 3600);
 
