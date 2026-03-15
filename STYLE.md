@@ -67,11 +67,11 @@ if !result.passed() {
 
 **Runtime enum state machines** — for DB-persisted or event-derived state. `transition_to()` with allowed-transition tables. Do NOT use typestate when: state comes from DB/events, external systems drive transitions, 5+ states, or cancellation spans multiple states.
 
-### Property-based testing
+### Property-based testing (proptest)
 
-Use proptest to verify algebraic laws — these catch design flaws that example-based tests miss:
+Use `proptest` (not quickcheck) to verify algebraic laws — these catch design flaws that example-based tests miss. Key APIs: `prop_recursive` for tree-like types (`Rule<A>`), `prop_oneof!` for enums, `prop_map`/`prop_flat_map` for constrained ranges. Shrinking is automatic.
 
-- **Rule algebra**: `evaluate` and `evaluate_detailed` agree on pass/fail; `All` is order-independent; `collect_failures` is empty iff `passed()`.
+- **Rule algebra**: `evaluate` and `evaluate_detailed` agree on pass/fail; `All` is order-independent; double negation; `describe` never panics.
 - **State machines**: terminal states have no valid transitions; transition graph has no unreachable states.
 - **Value objects**: construction rejects all out-of-bound values (fuzz the boundaries).
 - **Event processing**: handle + mark_processed is idempotent.
