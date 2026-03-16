@@ -42,6 +42,7 @@ pub enum EventType {
     PaymentFailed,
     PaymentCaptured,
     PaymentVoided,
+    PaymentTimedOut,
 }
 
 /// Metadata attached to every domain event.
@@ -186,6 +187,7 @@ mod tests {
             EventType::PaymentFailed,
             EventType::PaymentCaptured,
             EventType::PaymentVoided,
+            EventType::PaymentTimedOut,
         ];
         for variant in variants {
             let json = serde_json::to_string(&variant).unwrap();

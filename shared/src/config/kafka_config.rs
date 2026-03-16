@@ -1,5 +1,6 @@
 use super::read_env_or;
 
+#[derive(Clone)]
 pub struct KafkaConfig {
     pub brokers: String,
 }

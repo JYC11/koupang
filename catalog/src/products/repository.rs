@@ -81,7 +81,7 @@ pub async fn get_product_detail<'e>(
          LEFT JOIN LATERAL ( \
              SELECT json_agg(row_to_json(sr)) AS skus_json \
              FROM (SELECT id, created_at, updated_at, deleted_at, product_id, \
-                          sku_code, price, stock_quantity, attributes, status \
+                          sku_code, price, stock_quantity, reserved_quantity, attributes, status \
                    FROM skus WHERE product_id = p.id AND deleted_at IS NULL \
                    ORDER BY created_at ASC LIMIT 100) sr \
          ) s ON true \

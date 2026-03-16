@@ -63,7 +63,10 @@ impl CheckoutContext {
         Self {
             item_count: cart.item_count(),
             cart_total: cart.total(),
-            all_prices_valid: cart.items.iter().all(|i| i.unit_price.value() > Decimal::ZERO),
+            all_prices_valid: cart
+                .items
+                .iter()
+                .all(|i| i.unit_price.value() > Decimal::ZERO),
             all_quantities_valid: cart
                 .items
                 .iter()

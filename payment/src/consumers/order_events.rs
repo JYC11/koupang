@@ -1,78 +1,35 @@
-use crate::AppState;
 use crate::gateway::traits::PaymentGateway;
 use crate::ledger::repository as ledger_repo;
 use crate::ledger::value_objects::PaymentState;
 use crate::payments::service;
-use shared::db::PgPool;
+use shared::errors::AppError;
 use shared::events::EventEnvelope;
-use shared::outbox::{is_event_processed, mark_event_processed};
-
-const CONSUMER_GROUP: &str = "payment-service";
+use sqlx::PgConnection;
 
 /// Handle OrderConfirmed: capture the authorized payment.
 pub async fn handle_order_confirmed(
-    pool: &PgPool,
-    state: &AppState,
+    tx: &mut PgConnection,
     gateway: &dyn PaymentGateway,
     envelope: &EventEnvelope,
-) -> Result<(), String> {
-    let event_id = envelope.metadata.event_id;
-
-    if is_event_processed(pool, event_id, CONSUMER_GROUP)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(());
-    }
-
-    let order_id: uuid::Uuid = envelope.payload["order_id"]
-        .as_str()
-        .and_then(|s| s.parse().ok())
-        .ok_or("Missing or invalid order_id")?;
-
-    service::capture_payment(state, gateway, order_id)
-        .await
-        .map_err(|e| format!("Failed to capture payment: {e}"))?;
-
-    mark_event_processed(pool, event_id, "OrderConfirmed", "order", CONSUMER_GROUP)
-        .await
-        .map_err(|e| format!("Failed to mark event processed: {e}"))?;
-
-    Ok(())
+) -> Result<(), AppError> {
+    let order_id = extract_order_id(envelope)?;
+    service::capture_payment_on_tx(tx, gateway, order_id).await
 }
 
-/// Handle OrderCancelled: void if authorized, refund if captured.
+/// Handle OrderCancelled: void if authorized.
 pub async fn handle_order_cancelled(
-    pool: &PgPool,
-    state: &AppState,
+    tx: &mut PgConnection,
     gateway: &dyn PaymentGateway,
     envelope: &EventEnvelope,
-) -> Result<(), String> {
-    let event_id = envelope.metadata.event_id;
+) -> Result<(), AppError> {
+    let order_id = extract_order_id(envelope)?;
 
-    if is_event_processed(pool, event_id, CONSUMER_GROUP)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(());
-    }
-
-    let order_id: uuid::Uuid = envelope.payload["order_id"]
-        .as_str()
-        .and_then(|s| s.parse().ok())
-        .ok_or("Missing or invalid order_id")?;
-
-    let transactions = ledger_repo::list_transactions_by_order(pool, order_id)
-        .await
-        .map_err(|e| format!("Failed to list transactions: {e}"))?;
-
+    let transactions = ledger_repo::list_transactions_by_order(&mut *tx, order_id).await?;
     let payment_state = ledger_repo::derive_payment_state(&transactions);
 
     match payment_state {
         PaymentState::Authorized => {
-            service::void_payment(state, gateway, order_id)
-                .await
-                .map_err(|e| format!("Failed to void payment: {e}"))?;
+            service::void_payment_on_tx(tx, gateway, order_id).await?;
         }
         PaymentState::New | PaymentState::Failed => {
             // No payment to reverse
@@ -86,9 +43,12 @@ pub async fn handle_order_cancelled(
         }
     }
 
-    mark_event_processed(pool, event_id, "OrderCancelled", "order", CONSUMER_GROUP)
-        .await
-        .map_err(|e| format!("Failed to mark event processed: {e}"))?;
-
     Ok(())
+}
+
+fn extract_order_id(envelope: &EventEnvelope) -> Result<uuid::Uuid, AppError> {
+    envelope.payload["order_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| AppError::BadRequest("Missing or invalid order_id".to_string()))
 }

@@ -150,7 +150,7 @@ impl ShippingAddress {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShippingAddressReq {
     pub street: String,
     pub city: String,

@@ -31,7 +31,10 @@ pub async fn add_item(
     if !exists {
         let count = repository::cart_item_count(conn, user_id).await?;
         if count >= MAX_CART_ITEMS {
-            return Err(CartError::CartFull { max: MAX_CART_ITEMS }.into());
+            return Err(CartError::CartFull {
+                max: MAX_CART_ITEMS,
+            }
+            .into());
         }
     }
 

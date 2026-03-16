@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 // ── Request DTOs ────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddToCartReq {
     pub product_id: Uuid,
     pub sku_id: Uuid,

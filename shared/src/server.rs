@@ -1,6 +1,9 @@
 use crate::cache::init_optional_redis;
+use crate::config::consumer_config::ConsumerConfig;
 use crate::config::db_config::DbConfig;
+use crate::config::kafka_config::KafkaConfig;
 use crate::db::{PgPool, init_db};
+use crate::events::consumer::{EventHandler, KafkaEventConsumer};
 use crate::health::health_routes;
 use crate::observability::init_tracing;
 use axum::Router;
@@ -8,6 +11,8 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
 // InfraDep — infrastructure requirements as data (DOP ch.8 pattern)
@@ -22,6 +27,7 @@ pub enum InfraDep {
         migrations_dir: &'static str,
     },
     Redis,
+    Kafka,
 }
 
 impl fmt::Display for InfraDep {
@@ -29,6 +35,7 @@ impl fmt::Display for InfraDep {
         match self {
             Self::Postgres { url_env, .. } => write!(f, "Postgres({})", url_env),
             Self::Redis => write!(f, "Redis"),
+            Self::Kafka => write!(f, "Kafka"),
         }
     }
 }
@@ -56,6 +63,7 @@ fn describe_deps(deps: &[InfraDep]) -> String {
 pub struct Infra {
     pub db: Option<PgPool>,
     pub redis: Option<redis::aio::ConnectionManager>,
+    pub kafka: Option<KafkaConfig>,
 }
 
 impl Infra {
@@ -114,10 +122,21 @@ pub struct GrpcConfig {
 ///     })
 ///     .await
 /// ```
+/// Kafka consumer registration for ServiceBuilder.
+pub struct ConsumerRegistration {
+    pub group_id: String,
+    pub topics: Vec<String>,
+    pub handler: Arc<dyn EventHandler>,
+}
+
+/// Factory function that creates consumer registrations after infra is initialized.
+type ConsumerFactory = Box<dyn FnOnce(&Infra) -> Vec<ConsumerRegistration>>;
+
 pub struct ServiceBuilder {
     name: &'static str,
     http_port_env: &'static str,
     deps: Vec<InfraDep>,
+    consumer_factory: Option<ConsumerFactory>,
 }
 
 impl ServiceBuilder {
@@ -126,6 +145,7 @@ impl ServiceBuilder {
             name,
             http_port_env: "PORT",
             deps: Vec::new(),
+            consumer_factory: None,
         }
     }
 
@@ -158,18 +178,64 @@ impl ServiceBuilder {
         self
     }
 
+    /// Register Kafka consumers via a factory that receives initialized infra.
+    /// The factory is called after infra init, giving handlers access to pool/redis.
+    /// Automatically declares a Kafka dependency.
+    pub fn with_consumers<F>(mut self, factory: F) -> Self
+    where
+        F: FnOnce(&Infra) -> Vec<ConsumerRegistration> + 'static,
+    {
+        if !self.deps.iter().any(|d| matches!(d, InfraDep::Kafka)) {
+            self.deps.push(InfraDep::Kafka);
+        }
+        self.consumer_factory = Some(Box::new(factory));
+        self
+    }
+
     /// Run HTTP server only (no gRPC sidecar).
+    /// If consumers were registered, they are spawned as background tasks.
     pub async fn run<F>(self, build_app: F) -> Result<(), Box<dyn Error>>
     where
         F: FnOnce(&Infra) -> Router,
     {
         let port = self.parse_http_port();
-        let infra = self.init_infra().await?;
-        let app = build_app(&infra).merge(health_routes(self.name));
+        let name = self.name;
+        let deps = self.deps;
+        let consumer_factory = self.consumer_factory;
+        let infra = Self::do_init_infra(name, &deps).await?;
+        let app = build_app(&infra).merge(health_routes(name));
+
+        let shutdown = CancellationToken::new();
+
+        // Spawn Kafka consumers as background tasks
+        if let Some(factory) = consumer_factory {
+            let consumers = factory(&infra);
+            let kafka_config = infra
+                .kafka
+                .as_ref()
+                .expect("BUG: consumers registered but Kafka dep not initialized");
+            let pool = infra.require_db().clone();
+            for reg in consumers {
+                let config = ConsumerConfig::new(&reg.group_id, reg.topics);
+                match KafkaEventConsumer::new(kafka_config, config, reg.handler, pool.clone()) {
+                    Ok(consumer) => {
+                        let token = shutdown.clone();
+                        tokio::spawn(async move {
+                            consumer.run(token).await;
+                        });
+                        tracing::info!("{name} consumer '{}' started", reg.group_id);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create consumer '{}': {e}", reg.group_id);
+                    }
+                }
+            }
+        }
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-        tracing::info!("{} listening on port {port}", self.name);
+        tracing::info!("{name} listening on port {port}");
         axum::serve(listener, app).await?;
+        shutdown.cancel();
         Ok(())
     }
 
@@ -209,13 +275,19 @@ impl ServiceBuilder {
 
     /// Interpreter: walk the deps list and initialize each declared resource.
     async fn init_infra(&self) -> Result<Infra, Box<dyn Error>> {
-        init_tracing(self.name);
-        tracing::info!("{} infra deps: [{}]", self.name, describe_deps(&self.deps));
+        Self::do_init_infra(self.name, &self.deps).await
+    }
+
+    /// Static interpreter for use when `self` has been destructured.
+    async fn do_init_infra(name: &str, deps: &[InfraDep]) -> Result<Infra, Box<dyn Error>> {
+        init_tracing(name);
+        tracing::info!("{} infra deps: [{}]", name, describe_deps(deps));
 
         let mut db = None;
         let mut redis = None;
+        let mut kafka = None;
 
-        for dep in &self.deps {
+        for dep in deps {
             match dep {
                 InfraDep::Postgres {
                     url_env,
@@ -227,10 +299,13 @@ impl ServiceBuilder {
                 InfraDep::Redis => {
                     redis = init_optional_redis().await;
                 }
+                InfraDep::Kafka => {
+                    kafka = Some(KafkaConfig::new());
+                }
             }
         }
 
-        Ok(Infra { db, redis })
+        Ok(Infra { db, redis, kafka })
     }
 
     fn parse_http_port(&self) -> u16 {
@@ -313,6 +388,7 @@ mod tests {
         let infra = Infra {
             db: None,
             redis: None,
+            kafka: None,
         };
         infra.require_db();
     }
@@ -323,6 +399,7 @@ mod tests {
         let infra = Infra {
             db: None,
             redis: None,
+            kafka: None,
         };
         infra.require_redis();
     }

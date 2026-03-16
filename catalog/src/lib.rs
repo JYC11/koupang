@@ -5,6 +5,8 @@ use shared::db::PgPool;
 pub mod brands;
 pub mod categories;
 pub mod common;
+pub mod consumers;
+pub mod inventory;
 pub mod products;
 
 const PRODUCT_CACHE_TTL: u64 = 300; // 5 minutes

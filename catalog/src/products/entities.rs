@@ -62,6 +62,7 @@ pub struct SkuEntity {
     pub sku_code: String,
     pub price: Decimal,
     pub stock_quantity: i32,
+    pub reserved_quantity: i32,
     pub attributes: serde_json::Value,
     pub status: SkuStatus,
 }

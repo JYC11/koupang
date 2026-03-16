@@ -39,14 +39,14 @@ pub struct OrderFilter {
 
 // ── Create Order Request ────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateOrderReq {
     pub items: Vec<CreateOrderItemReq>,
     pub currency: Option<String>,
     pub shipping_address: ShippingAddressReq,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateOrderItemReq {
     pub product_id: Uuid,
     pub sku_id: Uuid,
