@@ -9,8 +9,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ServiceBuilder::new("payment")
         .http_port_env("PAYMENT_PORT")
         .with_db("PAYMENT_DB_URL")
-        .with_consumers(|_infra| {
-            let handler = Arc::new(PaymentEventHandler::with_mock_gateway());
+        .with_consumers(|infra| {
+            let handler = Arc::new(PaymentEventHandler::with_mock_gateway(
+                infra.require_db().clone(),
+            ));
             vec![ConsumerRegistration {
                 group_id: "payment-service".to_string(),
                 topics: vec!["catalog.events".to_string(), "orders.events".to_string()],

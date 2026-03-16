@@ -206,31 +206,7 @@ impl ServiceBuilder {
         let app = build_app(&infra).merge(health_routes(name));
 
         let shutdown = CancellationToken::new();
-
-        // Spawn Kafka consumers as background tasks
-        if let Some(factory) = consumer_factory {
-            let consumers = factory(&infra);
-            let kafka_config = infra
-                .kafka
-                .as_ref()
-                .expect("BUG: consumers registered but Kafka dep not initialized");
-            let pool = infra.require_db().clone();
-            for reg in consumers {
-                let config = ConsumerConfig::new(&reg.group_id, reg.topics);
-                match KafkaEventConsumer::new(kafka_config, config, reg.handler, pool.clone()) {
-                    Ok(consumer) => {
-                        let token = shutdown.clone();
-                        tokio::spawn(async move {
-                            consumer.run(token).await;
-                        });
-                        tracing::info!("{name} consumer '{}' started", reg.group_id);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to create consumer '{}': {e}", reg.group_id);
-                    }
-                }
-            }
-        }
+        Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{name} listening on port {port}");
@@ -252,6 +228,9 @@ impl ServiceBuilder {
         Fut: Future<Output = Result<(), tonic::transport::Error>> + Send,
     {
         let port = self.parse_http_port();
+        let name = self.name;
+        let deps = self.deps;
+        let consumer_factory = self.consumer_factory;
         let grpc_port: u16 = std::env::var(grpc_config.port_env_key)
             .unwrap_or_else(|_| grpc_config.default_port.to_string())
             .parse()
@@ -259,18 +238,55 @@ impl ServiceBuilder {
         assert!(grpc_port > 0, "gRPC port must be positive");
         let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
-        let infra = self.init_infra().await?;
-        let app = build_app(&infra).merge(health_routes(self.name));
+        let infra = Self::do_init_infra(name, &deps).await?;
+        let app = build_app(&infra).merge(health_routes(name));
+
+        let shutdown = CancellationToken::new();
+        Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-        tracing::info!("{} HTTP listening on port {port}", self.name);
-        tracing::info!("{} gRPC listening on port {grpc_port}", self.name);
+        tracing::info!("{name} HTTP listening on port {port}");
+        tracing::info!("{name} gRPC listening on port {grpc_port}");
 
         tokio::select! {
             result = axum::serve(listener, app) => { result?; }
             result = build_grpc(infra, grpc_addr) => { result?; }
         }
+        shutdown.cancel();
         Ok(())
+    }
+
+    /// Spawn Kafka consumers as background tasks. Shared by run() and run_with_grpc().
+    fn spawn_consumers(
+        name: &str,
+        consumer_factory: Option<ConsumerFactory>,
+        infra: &Infra,
+        shutdown: &CancellationToken,
+    ) {
+        let Some(factory) = consumer_factory else {
+            return;
+        };
+        let consumers = factory(infra);
+        let kafka_config = infra
+            .kafka
+            .as_ref()
+            .expect("BUG: consumers registered but Kafka dep not initialized");
+        let pool = infra.require_db().clone();
+        for reg in consumers {
+            let config = ConsumerConfig::new(&reg.group_id, reg.topics);
+            match KafkaEventConsumer::new(kafka_config, config, reg.handler, pool.clone()) {
+                Ok(consumer) => {
+                    let token = shutdown.clone();
+                    tokio::spawn(async move {
+                        consumer.run(token).await;
+                    });
+                    tracing::info!("{name} consumer '{}' started", reg.group_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create consumer '{}': {e}", reg.group_id);
+                }
+            }
+        }
     }
 
     /// Interpreter: walk the deps list and initialize each declared resource.

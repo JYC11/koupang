@@ -11,7 +11,7 @@ pub async fn handle_payment_authorized(
     tx: &mut PgConnection,
     envelope: &EventEnvelope,
 ) -> Result<(), AppError> {
-    let order_id = extract_order_id(envelope, "PaymentAuthorized")?;
+    let order_id = OrderId::new(envelope.payload_uuid("order_id")?);
 
     let order = repository::get_order_by_id(&mut *tx, order_id).await?;
     order
@@ -61,15 +61,19 @@ async fn cancel_order_on_payment_failure(
     envelope: &EventEnvelope,
     default_reason: &str,
 ) -> Result<(), AppError> {
-    let order_id = extract_order_id(envelope, "PaymentFailure")?;
+    let order_id = OrderId::new(envelope.payload_uuid("order_id")?);
     let reason = envelope.payload["reason"]
         .as_str()
         .unwrap_or(default_reason);
 
+    let order = repository::get_order_by_id(&mut *tx, order_id).await?;
+    order
+        .status
+        .transition_to(&OrderStatus::Cancelled)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
     repository::update_order_status(&mut *tx, order_id, &OrderStatus::Cancelled, Some(reason))
         .await?;
-
-    let order = repository::get_order_by_id(&mut *tx, order_id).await?;
 
     write_order_outbox(
         &mut *tx,
@@ -83,18 +87,6 @@ async fn cancel_order_on_payment_failure(
         Some(envelope.metadata.event_id),
     )
     .await
-}
-
-fn extract_order_id(envelope: &EventEnvelope, event_name: &str) -> Result<OrderId, AppError> {
-    let uuid: uuid::Uuid = envelope.payload["order_id"]
-        .as_str()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "Missing or invalid order_id in {event_name} payload"
-            ))
-        })?;
-    Ok(OrderId::new(uuid))
 }
 
 async fn write_order_outbox(

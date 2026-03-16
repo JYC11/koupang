@@ -16,6 +16,12 @@ pub enum TxError {
     Other(String),
 }
 
+impl From<crate::errors::AppError> for TxError {
+    fn from(e: crate::errors::AppError) -> Self {
+        Self::Other(e.to_string())
+    }
+}
+
 pub type TxResult<T> = Result<T, TxError>;
 
 pub struct TxContext<'tx> {

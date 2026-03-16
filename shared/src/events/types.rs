@@ -112,6 +112,19 @@ impl EventEnvelope {
     pub fn partition_key(&self) -> String {
         self.metadata.aggregate_id.to_string()
     }
+
+    /// Extract a UUID field from the payload. Common pattern in consumer handlers.
+    pub fn payload_uuid(&self, field: &str) -> Result<Uuid, crate::errors::AppError> {
+        self.payload[field]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| {
+                crate::errors::AppError::BadRequest(format!(
+                    "Missing or invalid {field} in {} payload",
+                    self.metadata.event_type
+                ))
+            })
+    }
 }
 
 impl std::fmt::Display for EventType {

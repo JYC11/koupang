@@ -7,12 +7,15 @@ use crate::ledger::value_objects::{
 use crate::payments::error::PaymentError;
 use crate::payments::rules::{AuthorizationContext, authorization_rules, eval_authorization};
 use rust_decimal::Decimal;
+use shared::db::PgPool;
 use shared::db::transaction_support::{TxError, with_transaction};
 use shared::errors::AppError;
 use shared::events::{AggregateType, EventEnvelope, EventMetadata, EventType, SourceService};
 use shared::outbox::{OutboxInsert, insert_outbox_event};
 use sqlx::PgConnection;
 use uuid::Uuid;
+
+// ── Pool-based public API (used by HTTP routes) ─────────────
 
 /// Authorize payment for an order. Called when InventoryReserved is received.
 pub async fn authorize_payment(
@@ -24,29 +27,17 @@ pub async fn authorize_payment(
 ) -> Result<(), AppError> {
     let idempotency_key = format!("auth:{order_id}");
 
-    // 3-case idempotency: check if transaction already exists.
     let existing_tx =
         ledger_repo::get_transaction_by_idempotency_key(&state.pool, &idempotency_key).await?;
-
     if let Some(ref existing) = existing_tx {
         if existing.status != TransactionStatus::Discarded {
-            return Ok(()); // Case 1: already processed, safe retry.
+            return Ok(());
         }
-        // Case 3: previous attempt failed, allow retry.
     }
 
-    // Evaluate authorization rules
     let transactions = ledger_repo::list_transactions_by_order(&state.pool, order_id).await?;
     let payment_state = ledger_repo::derive_payment_state(&transactions);
-    let auth_ctx = AuthorizationContext {
-        amount,
-        currency: currency.to_string(),
-        payment_state,
-    };
-    let result = authorization_rules().evaluate_detailed(&eval_authorization(&auth_ctx));
-    if !result.passed() {
-        return Err(PaymentError::ValidationFailed(result.failure_messages().join("; ")).into());
-    }
+    validate_authorization(amount, currency, &payment_state)?;
 
     let auth_result = gateway
         .authorize(&idempotency_key, order_id, amount, currency)
@@ -57,8 +48,22 @@ pub async fn authorize_payment(
             if result.approved_amount != amount {
                 return handle_tampered_amount(state, gateway, order_id, amount, &result).await;
             }
-            record_authorization(state, order_id, amount, currency, &result.gateway_reference)
-                .await?;
+            let currency_owned = currency.to_string();
+            with_transaction(&state.pool, |tx| {
+                Box::pin(async move {
+                    record_authorization(
+                        tx.as_executor(),
+                        order_id,
+                        amount,
+                        &currency_owned,
+                        &result.gateway_reference,
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|e| AppError::InternalServerError(format!("Failed to authorize: {e}")))?;
         }
         Err(e) => {
             tracing::warn!(order_id = %order_id, error = %e, "Gateway declined authorization");
@@ -72,51 +77,29 @@ pub async fn authorize_payment(
     Ok(())
 }
 
-/// Capture an authorized payment. Called when OrderConfirmed is received.
+/// Capture an authorized payment.
 pub async fn capture_payment(
     state: &AppState,
     gateway: &dyn PaymentGateway,
     order_id: Uuid,
 ) -> Result<(), AppError> {
-    let (auth_tx_id, gateway_ref, auth_currency, amount) =
-        find_posted_authorization(state, order_id, "capture").await?;
+    let (_, gateway_ref, auth_currency, amount) =
+        find_posted_authorization(&state.pool, order_id, "capture").await?;
 
-    let _capture_result = gateway.capture(&gateway_ref).await?;
+    gateway.capture(&gateway_ref).await?;
 
     let idempotency_key = format!("capture:{order_id}");
-
     with_transaction(&state.pool, |tx| {
         Box::pin(async move {
-            let (holding, revenue) = create_account_pair(
+            record_capture(
                 tx.as_executor(),
                 order_id,
                 &auth_currency,
-                &AccountType::GatewayHolding,
-                &AccountType::PlatformRevenue,
-            )
-            .await?;
-
-            let capture_tx = ledger_repo::create_transaction(
-                tx.as_executor(),
-                order_id,
-                &TransactionType::Capture,
+                amount,
                 &idempotency_key,
-                Some(&gateway_ref),
-            )
-            .await
-            .map_err(|e| TxError::Other(e.to_string()))?;
-
-            // Debit platform_revenue, Credit gateway_holding.
-            write_entry_pair(tx.as_executor(), capture_tx.id, revenue, holding, amount).await?;
-            post_transaction(tx.as_executor(), capture_tx.id).await?;
-            write_outbox(
-                tx.as_executor(),
-                order_id,
-                EventType::PaymentCaptured,
-                || serde_json::json!({ "order_id": order_id.to_string() }),
+                &gateway_ref,
             )
             .await?;
-
             Ok(())
         })
     })
@@ -124,61 +107,29 @@ pub async fn capture_payment(
     .map_err(|e| AppError::InternalServerError(format!("Failed to capture payment: {e}")))
 }
 
-/// Void an authorized payment. Called when OrderCancelled is received (pre-capture).
+/// Void an authorized payment.
 pub async fn void_payment(
     state: &AppState,
     gateway: &dyn PaymentGateway,
     order_id: Uuid,
 ) -> Result<(), AppError> {
     let (auth_tx_id, gateway_ref, auth_currency, amount) =
-        find_posted_authorization(state, order_id, "void").await?;
+        find_posted_authorization(&state.pool, order_id, "void").await?;
 
     gateway.void(&gateway_ref).await?;
 
     let idempotency_key = format!("void:{order_id}");
-
     with_transaction(&state.pool, |tx| {
         Box::pin(async move {
-            // Discard the original authorization.
-            ledger_repo::update_transaction_status(
+            record_void(
                 tx.as_executor(),
+                order_id,
                 auth_tx_id,
-                &TransactionStatus::Discarded,
-                None,
-            )
-            .await
-            .map_err(|e| TxError::Other(e.to_string()))?;
-
-            let (buyer, holding) = create_account_pair(
-                tx.as_executor(),
-                order_id,
                 &auth_currency,
-                &AccountType::Buyer,
-                &AccountType::GatewayHolding,
-            )
-            .await?;
-
-            let void_tx = ledger_repo::create_transaction(
-                tx.as_executor(),
-                order_id,
-                &TransactionType::Void,
+                amount,
                 &idempotency_key,
-                None,
-            )
-            .await
-            .map_err(|e| TxError::Other(e.to_string()))?;
-
-            // Debit buyer (return money), Credit gateway_holding.
-            write_entry_pair(tx.as_executor(), void_tx.id, buyer, holding, amount).await?;
-            post_transaction(tx.as_executor(), void_tx.id).await?;
-            write_outbox(
-                tx.as_executor(),
-                order_id,
-                EventType::PaymentVoided,
-                || serde_json::json!({ "order_id": order_id.to_string() }),
             )
             .await?;
-
             Ok(())
         })
     })
@@ -186,10 +137,11 @@ pub async fn void_payment(
     .map_err(|e| AppError::InternalServerError(format!("Failed to void payment: {e}")))
 }
 
-// ── On-tx variants (for use inside consumer's transaction) ──
+// ── On-tx public API (read on pool, gateway call, write on tx) ──
 
-/// Authorize payment on an existing transaction. Gateway call + ledger writes on `tx`.
+/// Authorize payment: reads on pool (no held connection during gateway call), writes on tx.
 pub async fn authorize_payment_on_tx(
+    pool: &PgPool,
     tx: &mut PgConnection,
     gateway: &dyn PaymentGateway,
     order_id: Uuid,
@@ -198,173 +150,131 @@ pub async fn authorize_payment_on_tx(
 ) -> Result<(), AppError> {
     let idempotency_key = format!("auth:{order_id}");
 
-    let existing_tx =
-        ledger_repo::get_transaction_by_idempotency_key(&mut *tx, &idempotency_key).await?;
-    if let Some(ref existing) = existing_tx {
+    // Read phase (on pool — connection returned before gateway call)
+    let existing = ledger_repo::get_transaction_by_idempotency_key(pool, &idempotency_key).await?;
+    if let Some(ref existing) = existing {
         if existing.status != TransactionStatus::Discarded {
             return Ok(());
         }
     }
 
-    let transactions = ledger_repo::list_transactions_by_order(&mut *tx, order_id).await?;
+    let transactions = ledger_repo::list_transactions_by_order(pool, order_id).await?;
     let payment_state = ledger_repo::derive_payment_state(&transactions);
-    let auth_ctx = AuthorizationContext {
-        amount,
-        currency: currency.to_string(),
-        payment_state,
-    };
-    let result = authorization_rules().evaluate_detailed(&eval_authorization(&auth_ctx));
-    if !result.passed() {
-        return Err(PaymentError::ValidationFailed(result.failure_messages().join("; ")).into());
-    }
+    validate_authorization(amount, currency, &payment_state)?;
 
+    // Gateway call (no DB connection held)
     let auth_result = gateway
         .authorize(&idempotency_key, order_id, amount, currency)
         .await;
 
+    // Write phase (on consumer's tx)
     match auth_result {
         Ok(result) => {
             if result.approved_amount != amount {
                 if let Err(e) = gateway.void(&result.gateway_reference).await {
-                    tracing::error!(order_id = %order_id, error = %e, "Failed to void tampered authorization");
+                    tracing::error!(order_id = %order_id, error = %e, "Failed to void tampered auth");
                 }
-                write_outbox(
-                    &mut *tx,
-                    order_id,
-                    EventType::PaymentFailed,
-                    || serde_json::json!({
+                write_outbox(tx, order_id, EventType::PaymentFailed, || {
+                    serde_json::json!({
                         "order_id": order_id.to_string(),
                         "reason": format!("Amount tampering: requested={amount}, approved={}", result.approved_amount),
-                    }),
-                )
-                .await
-                .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+                    })
+                })
+                .await?;
                 return Err(PaymentError::AmountTampered {
                     requested: amount,
                     approved: result.approved_amount,
                 }
                 .into());
             }
-            record_authorization_on_tx(
-                &mut *tx,
-                order_id,
-                amount,
-                currency,
-                &result.gateway_reference,
-            )
-            .await?;
+            record_authorization(tx, order_id, amount, currency, &result.gateway_reference).await?;
         }
         Err(e) => {
             tracing::warn!(order_id = %order_id, error = %e, "Gateway declined authorization");
-            write_outbox(
-                &mut *tx,
-                order_id,
-                EventType::PaymentFailed,
-                || serde_json::json!({ "order_id": order_id.to_string(), "reason": "Payment gateway declined" }),
-            )
-            .await
-            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+            write_outbox(tx, order_id, EventType::PaymentFailed, || {
+                serde_json::json!({ "order_id": order_id.to_string(), "reason": "Payment gateway declined" })
+            })
+            .await?;
         }
     }
 
     Ok(())
 }
 
-/// Capture payment on an existing transaction.
+/// Capture payment: reads on pool, gateway call, writes on tx.
 pub async fn capture_payment_on_tx(
+    pool: &PgPool,
     tx: &mut PgConnection,
     gateway: &dyn PaymentGateway,
     order_id: Uuid,
 ) -> Result<(), AppError> {
-    let (auth_tx_id, gateway_ref, auth_currency, amount) =
-        find_posted_authorization_on_tx(&mut *tx, order_id, "capture").await?;
+    // Read phase (pool)
+    let (_, gateway_ref, auth_currency, amount) =
+        find_posted_authorization(pool, order_id, "capture").await?;
 
+    // Gateway call (no DB held)
     gateway.capture(&gateway_ref).await?;
 
+    // Write phase (tx)
     let idempotency_key = format!("capture:{order_id}");
-    let (holding, revenue) = create_account_pair_on_tx(
-        &mut *tx,
+    record_capture(
+        tx,
         order_id,
         &auth_currency,
-        &AccountType::GatewayHolding,
-        &AccountType::PlatformRevenue,
-    )
-    .await?;
-
-    let capture_tx = ledger_repo::create_transaction(
-        &mut *tx,
-        order_id,
-        &TransactionType::Capture,
+        amount,
         &idempotency_key,
-        Some(&gateway_ref),
-    )
-    .await?;
-
-    write_entry_pair_on_tx(&mut *tx, capture_tx.id, revenue, holding, amount).await?;
-    post_transaction_on_tx(&mut *tx, capture_tx.id).await?;
-    write_outbox(
-        &mut *tx,
-        order_id,
-        EventType::PaymentCaptured,
-        || serde_json::json!({ "order_id": order_id.to_string() }),
+        &gateway_ref,
     )
     .await
-    .map_err(|e| AppError::InternalServerError(e.to_string()))
 }
 
-/// Void payment on an existing transaction.
+/// Void payment: reads on pool, gateway call, writes on tx.
 pub async fn void_payment_on_tx(
+    pool: &PgPool,
     tx: &mut PgConnection,
     gateway: &dyn PaymentGateway,
     order_id: Uuid,
 ) -> Result<(), AppError> {
+    // Read phase (pool)
     let (auth_tx_id, gateway_ref, auth_currency, amount) =
-        find_posted_authorization_on_tx(&mut *tx, order_id, "void").await?;
+        find_posted_authorization(pool, order_id, "void").await?;
 
+    // Gateway call (no DB held)
     gateway.void(&gateway_ref).await?;
 
+    // Write phase (tx)
     let idempotency_key = format!("void:{order_id}");
-    ledger_repo::update_transaction_status(
-        &mut *tx,
+    record_void(
+        tx,
+        order_id,
         auth_tx_id,
-        &TransactionStatus::Discarded,
-        None,
-    )
-    .await?;
-
-    let (buyer, holding) = create_account_pair_on_tx(
-        &mut *tx,
-        order_id,
         &auth_currency,
-        &AccountType::Buyer,
-        &AccountType::GatewayHolding,
-    )
-    .await?;
-
-    let void_tx = ledger_repo::create_transaction(
-        &mut *tx,
-        order_id,
-        &TransactionType::Void,
+        amount,
         &idempotency_key,
-        None,
-    )
-    .await?;
-
-    write_entry_pair_on_tx(&mut *tx, void_tx.id, buyer, holding, amount).await?;
-    post_transaction_on_tx(&mut *tx, void_tx.id).await?;
-    write_outbox(
-        &mut *tx,
-        order_id,
-        EventType::PaymentVoided,
-        || serde_json::json!({ "order_id": order_id.to_string() }),
     )
     .await
-    .map_err(|e| AppError::InternalServerError(e.to_string()))
 }
 
-// ── On-tx internal helpers ──────────────────────────────────
+// ── Shared helpers (all return AppError, used by both API styles) ──
 
-async fn record_authorization_on_tx(
+fn validate_authorization(
+    amount: Decimal,
+    currency: &str,
+    payment_state: &crate::ledger::value_objects::PaymentState,
+) -> Result<(), AppError> {
+    let auth_ctx = AuthorizationContext {
+        amount,
+        currency: currency.to_string(),
+        payment_state: *payment_state,
+    };
+    let result = authorization_rules().evaluate_detailed(&eval_authorization(&auth_ctx));
+    if !result.passed() {
+        return Err(PaymentError::ValidationFailed(result.failure_messages().join("; ")).into());
+    }
+    Ok(())
+}
+
+async fn record_authorization(
     tx: &mut PgConnection,
     order_id: Uuid,
     amount: Decimal,
@@ -372,7 +282,7 @@ async fn record_authorization_on_tx(
     gateway_ref: &str,
 ) -> Result<(), AppError> {
     let idempotency_key = format!("auth:{order_id}");
-    let (buyer, holding) = create_account_pair_on_tx(
+    let (buyer, holding) = create_account_pair(
         tx,
         order_id,
         currency,
@@ -390,8 +300,8 @@ async fn record_authorization_on_tx(
     )
     .await?;
 
-    write_entry_pair_on_tx(tx, ledger_tx.id, holding, buyer, amount).await?;
-    post_transaction_on_tx(tx, ledger_tx.id).await?;
+    write_entry_pair(tx, ledger_tx.id, holding, buyer, amount).await?;
+    post_transaction(tx, ledger_tx.id).await?;
     let gw = gateway_ref.to_string();
     write_outbox(tx, order_id, EventType::PaymentAuthorized, || {
         serde_json::json!({
@@ -401,15 +311,91 @@ async fn record_authorization_on_tx(
         })
     })
     .await
-    .map_err(|e| AppError::InternalServerError(e.to_string()))
 }
 
-async fn find_posted_authorization_on_tx(
+async fn record_capture(
     tx: &mut PgConnection,
+    order_id: Uuid,
+    auth_currency: &str,
+    amount: Decimal,
+    idempotency_key: &str,
+    gateway_ref: &str,
+) -> Result<(), AppError> {
+    let (holding, revenue) = create_account_pair(
+        tx,
+        order_id,
+        auth_currency,
+        &AccountType::GatewayHolding,
+        &AccountType::PlatformRevenue,
+    )
+    .await?;
+
+    let capture_tx = ledger_repo::create_transaction(
+        tx,
+        order_id,
+        &TransactionType::Capture,
+        idempotency_key,
+        Some(gateway_ref),
+    )
+    .await?;
+
+    write_entry_pair(tx, capture_tx.id, revenue, holding, amount).await?;
+    post_transaction(tx, capture_tx.id).await?;
+    write_outbox(
+        tx,
+        order_id,
+        EventType::PaymentCaptured,
+        || serde_json::json!({ "order_id": order_id.to_string() }),
+    )
+    .await
+}
+
+async fn record_void(
+    tx: &mut PgConnection,
+    order_id: Uuid,
+    auth_tx_id: Uuid,
+    auth_currency: &str,
+    amount: Decimal,
+    idempotency_key: &str,
+) -> Result<(), AppError> {
+    ledger_repo::update_transaction_status(tx, auth_tx_id, &TransactionStatus::Discarded, None)
+        .await?;
+
+    let (buyer, holding) = create_account_pair(
+        tx,
+        order_id,
+        auth_currency,
+        &AccountType::Buyer,
+        &AccountType::GatewayHolding,
+    )
+    .await?;
+
+    let void_tx = ledger_repo::create_transaction(
+        tx,
+        order_id,
+        &TransactionType::Void,
+        idempotency_key,
+        None,
+    )
+    .await?;
+
+    write_entry_pair(tx, void_tx.id, buyer, holding, amount).await?;
+    post_transaction(tx, void_tx.id).await?;
+    write_outbox(
+        tx,
+        order_id,
+        EventType::PaymentVoided,
+        || serde_json::json!({ "order_id": order_id.to_string() }),
+    )
+    .await
+}
+
+async fn find_posted_authorization(
+    executor: &PgPool,
     order_id: Uuid,
     operation: &str,
 ) -> Result<(Uuid, String, String, Decimal), AppError> {
-    let transactions = ledger_repo::list_transactions_by_order(&mut *tx, order_id).await?;
+    let transactions = ledger_repo::list_transactions_by_order(executor, order_id).await?;
     let payment_state = ledger_repo::derive_payment_state(&transactions);
 
     match operation {
@@ -437,11 +423,12 @@ async fn find_posted_authorization_on_tx(
             "Authorization missing gateway reference".to_string(),
         ))?;
 
-    let auth_entries = ledger_repo::list_entries_by_transaction(&mut *tx, auth_tx.id).await?;
+    let auth_entries = ledger_repo::list_entries_by_transaction(executor, auth_tx.id).await?;
     let amount = auth_entries
         .first()
         .map(|e| e.amount)
         .unwrap_or(Decimal::ZERO);
+
     let currency = auth_tx.metadata["currency"]
         .as_str()
         .unwrap_or("USD")
@@ -450,7 +437,7 @@ async fn find_posted_authorization_on_tx(
     Ok((auth_tx.id, gateway_ref, currency, amount))
 }
 
-async fn create_account_pair_on_tx(
+async fn create_account_pair(
     tx: &mut PgConnection,
     order_id: Uuid,
     currency: &str,
@@ -463,206 +450,13 @@ async fn create_account_pair_on_tx(
     Ok((debit_acct.id, credit_acct.id))
 }
 
-async fn write_entry_pair_on_tx(
-    tx: &mut PgConnection,
-    transaction_id: Uuid,
-    debit_account_id: Uuid,
-    credit_account_id: Uuid,
-    amount: Decimal,
-) -> Result<(), AppError> {
-    ledger_repo::create_entry(
-        tx,
-        transaction_id,
-        debit_account_id,
-        &EntryDirection::Debit,
-        amount,
-    )
-    .await?;
-    ledger_repo::create_entry(
-        tx,
-        transaction_id,
-        credit_account_id,
-        &EntryDirection::Credit,
-        amount,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn post_transaction_on_tx(
-    tx: &mut PgConnection,
-    transaction_id: Uuid,
-) -> Result<(), AppError> {
-    ledger_repo::update_transaction_status(tx, transaction_id, &TransactionStatus::Posted, None)
-        .await
-}
-
-// ── Helpers (extracted to meet 70-line limit) ───────────────
-
-/// Handle tampered gateway amount: void the auth and write PaymentFailed.
-async fn handle_tampered_amount(
-    state: &AppState,
-    gateway: &dyn PaymentGateway,
-    order_id: Uuid,
-    requested: Decimal,
-    result: &crate::gateway::traits::GatewayAuthResult,
-) -> Result<(), AppError> {
-    // Best-effort void — log failure but don't block the tamper error.
-    if let Err(e) = gateway.void(&result.gateway_reference).await {
-        tracing::error!(order_id = %order_id, error = %e, "Failed to void tampered authorization");
-    }
-
-    write_payment_event(
-        state,
-        order_id,
-        EventType::PaymentFailed,
-        || {
-            serde_json::json!({
-                "order_id": order_id.to_string(),
-                "reason": format!("Amount tampering: requested={requested}, approved={}", result.approved_amount),
-            })
-        },
-    )
-    .await?;
-
-    Err(PaymentError::AmountTampered {
-        requested,
-        approved: result.approved_amount,
-    }
-    .into())
-}
-
-/// Record a successful authorization: create accounts, transaction, entries, outbox.
-async fn record_authorization(
-    state: &AppState,
-    order_id: Uuid,
-    amount: Decimal,
-    currency: &str,
-    gateway_ref: &str,
-) -> Result<(), AppError> {
-    let currency_owned = currency.to_string();
-    let gateway_ref_owned = gateway_ref.to_string();
-    let idempotency_key = format!("auth:{order_id}");
-
-    with_transaction(&state.pool, |tx| {
-        Box::pin(async move {
-            let (buyer, holding) = create_account_pair(
-                tx.as_executor(),
-                order_id,
-                &currency_owned,
-                &AccountType::Buyer,
-                &AccountType::GatewayHolding,
-            )
-            .await?;
-
-            let ledger_tx = ledger_repo::create_transaction(
-                tx.as_executor(),
-                order_id,
-                &TransactionType::Authorization,
-                &idempotency_key,
-                Some(&gateway_ref_owned),
-            )
-            .await
-            .map_err(|e| TxError::Other(e.to_string()))?;
-
-            // Debit gateway_holding, Credit buyer.
-            write_entry_pair(tx.as_executor(), ledger_tx.id, holding, buyer, amount).await?;
-            post_transaction(tx.as_executor(), ledger_tx.id).await?;
-            write_outbox(
-                tx.as_executor(),
-                order_id,
-                EventType::PaymentAuthorized,
-                || {
-                    serde_json::json!({
-                        "order_id": order_id.to_string(),
-                        "payment_id": ledger_tx.id.to_string(),
-                        "gateway_reference": gateway_ref_owned,
-                    })
-                },
-            )
-            .await?;
-
-            Ok(())
-        })
-    })
-    .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to authorize payment: {e}")))
-}
-
-/// Find the posted authorization for an order. Returns (tx_id, gateway_ref, currency, amount).
-async fn find_posted_authorization(
-    state: &AppState,
-    order_id: Uuid,
-    operation: &str,
-) -> Result<(Uuid, String, String, Decimal), AppError> {
-    let transactions = ledger_repo::list_transactions_by_order(&state.pool, order_id).await?;
-    let payment_state = ledger_repo::derive_payment_state(&transactions);
-
-    match operation {
-        "capture" => payment_state
-            .validate_for_capture()
-            .map_err(AppError::from)?,
-        "void" => payment_state.validate_for_void().map_err(AppError::from)?,
-        _ => {}
-    }
-
-    let auth_tx = transactions
-        .iter()
-        .find(|t| {
-            t.transaction_type == TransactionType::Authorization
-                && t.status == TransactionStatus::Posted
-        })
-        .ok_or(AppError::NotFound(
-            "No posted authorization found".to_string(),
-        ))?;
-
-    let gateway_ref = auth_tx
-        .gateway_reference
-        .clone()
-        .ok_or(AppError::InternalServerError(
-            "Authorization missing gateway reference".to_string(),
-        ))?;
-
-    let auth_entries = ledger_repo::list_entries_by_transaction(&state.pool, auth_tx.id).await?;
-    let amount = auth_entries
-        .first()
-        .map(|e| e.amount)
-        .unwrap_or(Decimal::ZERO);
-
-    // Currency from the account associated with the first entry.
-    let currency = auth_tx.metadata["currency"]
-        .as_str()
-        .unwrap_or("USD")
-        .to_string();
-
-    Ok((auth_tx.id, gateway_ref, currency, amount))
-}
-
-/// Create or fetch two accounts in one go. Returns (debit_account_id, credit_account_id).
-async fn create_account_pair(
-    tx: &mut PgConnection,
-    order_id: Uuid,
-    currency: &str,
-    debit_type: &AccountType,
-    credit_type: &AccountType,
-) -> Result<(Uuid, Uuid), TxError> {
-    let debit_acct = ledger_repo::get_or_create_account(tx, debit_type, order_id, currency)
-        .await
-        .map_err(|e| TxError::Other(e.to_string()))?;
-    let credit_acct = ledger_repo::get_or_create_account(tx, credit_type, order_id, currency)
-        .await
-        .map_err(|e| TxError::Other(e.to_string()))?;
-    Ok((debit_acct.id, credit_acct.id))
-}
-
-/// Write a debit + credit entry pair for a transaction.
 async fn write_entry_pair(
     tx: &mut PgConnection,
     transaction_id: Uuid,
     debit_account_id: Uuid,
     credit_account_id: Uuid,
     amount: Decimal,
-) -> Result<(), TxError> {
+) -> Result<(), AppError> {
     ledger_repo::create_entry(
         tx,
         transaction_id,
@@ -670,8 +464,7 @@ async fn write_entry_pair(
         &EntryDirection::Debit,
         amount,
     )
-    .await
-    .map_err(|e| TxError::Other(e.to_string()))?;
+    .await?;
     ledger_repo::create_entry(
         tx,
         transaction_id,
@@ -679,25 +472,21 @@ async fn write_entry_pair(
         &EntryDirection::Credit,
         amount,
     )
-    .await
-    .map_err(|e| TxError::Other(e.to_string()))?;
+    .await?;
     Ok(())
 }
 
-/// Mark a ledger transaction as posted.
-async fn post_transaction(tx: &mut PgConnection, transaction_id: Uuid) -> Result<(), TxError> {
+async fn post_transaction(tx: &mut PgConnection, transaction_id: Uuid) -> Result<(), AppError> {
     ledger_repo::update_transaction_status(tx, transaction_id, &TransactionStatus::Posted, None)
         .await
-        .map_err(|e| TxError::Other(e.to_string()))
 }
 
-/// Write an outbox event inside a transaction.
 async fn write_outbox(
     tx: &mut PgConnection,
     order_id: Uuid,
     event_type: EventType,
     payload_fn: impl FnOnce() -> serde_json::Value,
-) -> Result<(), TxError> {
+) -> Result<(), AppError> {
     let metadata = EventMetadata::new(
         event_type,
         AggregateType::Payment,
@@ -706,10 +495,34 @@ async fn write_outbox(
     );
     let envelope = EventEnvelope::new(metadata, payload_fn());
     let insert = OutboxInsert::from_envelope("payments.events", &envelope);
-    insert_outbox_event(tx, &insert)
-        .await
-        .map(|_| ())
-        .map_err(|e| TxError::Other(e.to_string()))
+    insert_outbox_event(tx, &insert).await.map(|_| ())
+}
+
+/// Handle tampered gateway amount (pool-based path only).
+async fn handle_tampered_amount(
+    state: &AppState,
+    gateway: &dyn PaymentGateway,
+    order_id: Uuid,
+    requested: Decimal,
+    result: &crate::gateway::traits::GatewayAuthResult,
+) -> Result<(), AppError> {
+    if let Err(e) = gateway.void(&result.gateway_reference).await {
+        tracing::error!(order_id = %order_id, error = %e, "Failed to void tampered authorization");
+    }
+
+    write_payment_event(state, order_id, EventType::PaymentFailed, || {
+        serde_json::json!({
+            "order_id": order_id.to_string(),
+            "reason": format!("Amount tampering: requested={requested}, approved={}", result.approved_amount),
+        })
+    })
+    .await?;
+
+    Err(PaymentError::AmountTampered {
+        requested,
+        approved: result.approved_amount,
+    }
+    .into())
 }
 
 /// Write a payment event outside a transaction (creates its own).
