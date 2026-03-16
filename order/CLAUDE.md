@@ -21,7 +21,7 @@ order/src/
 └── outbox/                       # Uses shared outbox infrastructure
 ```
 
-Tests: `tests/orders/{repository,service,router}_test.rs` + `tests/common/mod.rs`
+Tests: `tests/orders/{repository,service,router,consumer}_test.rs` + `tests/common/mod.rs`
 
 ## Endpoints (`/api/v1/orders`)
 
@@ -55,7 +55,7 @@ All routes require JWT auth.
 | `PaymentFailed` | `payment_events` | Cancel order, write OrderCancelled outbox |
 | `PaymentTimedOut` | `payment_events` | Cancel order, write OrderCancelled outbox |
 
-All handlers use the consumer-provided `&mut PgConnection` (no own transactions or idempotency checks).
+All handlers use the consumer-provided `&mut PgConnection` (no own transactions or idempotency checks). All cancellation paths validate `transition_to(&Cancelled)` to prevent state machine corruption from duplicate events.
 
 ## Env Vars
 
@@ -63,4 +63,10 @@ All handlers use the consumer-provided `&mut PgConnection` (no own transactions 
 
 ## Tests
 
-48 unit + 31 integration = 79 tests. `make test SERVICE=order`
+48 unit + 40 integration = 88 tests. `make test SERVICE=order`
+
+Test layers:
+- Repository (12): create, idempotency, status updates, keyset pagination, seller view
+- Service (14): create with outbox, cancel with rules, access guards, idempotency
+- Router (5): HTTP status codes, idempotency header, auth
+- Consumer handlers (9): inventory reserved/failed transitions, payment authorized/failed/timed_out

@@ -114,12 +114,15 @@ Lists are **not cached** (paginated + filtered = poor hit rate).
 
 ## Tests
 
-62 unit + 83 integration = 145 tests. `make test SERVICE=catalog`
+55 unit + 105 integration = 160 tests. `make test SERVICE=catalog`
 
 Test layers follow `/test-guide` skill:
-- Repository (16): internal helpers (has_products, has_children, FK exists, is_brand_in_category), JOIN behavior, ltree paths, soft deletes, stock adjustment SQL, CHECK constraints
-- Service (15): business guards (delete-with-products, delete-with-children), FK validation (6 tests), ownership checks, hierarchy logic, status filtering
-- Router (46): canonical CRUD flows, HTTP status codes, auth, pagination, filters
+- Products repository (16): internal helpers, JOINs, ltree paths, soft deletes, stock adjustment, CHECK constraints
+- Products service (15): business guards, FK validation (6 tests), ownership, hierarchy, status filtering
+- Products router (46): canonical CRUD flows, HTTP status codes, auth, pagination, filters
+- Products cache (6): Redis cache eviction on mutations
+- Inventory repository (16): reserve, release, confirm, availability, insufficient stock, boundaries, multi-order
+- Inventory service (6): reserve+outbox, release, confirm
 
 ### Tips
 - ltree: `::ltree` cast on INSERT, `::text` cast on SELECT

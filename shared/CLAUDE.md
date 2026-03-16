@@ -67,7 +67,7 @@ shared/src/
 |--------|-------------|
 | `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers as background tasks; `Infra { db, redis, kafka }` passed to closures; `ConsumerRegistration { group_id, topics, handler }` |
 | `db` | `init_db() → Result`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
-| `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors |
+| `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors; `From<AppError> for TxError` enables `?` propagation in closures |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `PaginatedResponse<T>` (Serialize+Deserialize), `HasId` trait |
 | `auth::jwt` | `jwt::generate_access_token(&config, ...)`, `jwt::validate_access_token(&config, token)`, `CurrentUser { id, role }` (axum extractor), `AccessTokenClaims` (axum extractor) |
 | `auth::middleware` | `AuthMiddleware::new(auth_config, user_lookup)` (identity), `::new_claims_based(auth_config)` (other services, ADR-008) |
@@ -79,7 +79,7 @@ shared/src/
 | `new_types::money` | `Price` (non-negative Decimal), `Currency` (3-letter ISO 4217), `Money` (Price+Currency pair, `same_currency()`) |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
 | `email` | `EmailService` trait, `MockEmailService` |
-| `events` | `EventEnvelope`, `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
+| `events` | `EventEnvelope` (`.payload_uuid(field)` helper), `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` (`.with_redis()` for dedup), `RelayHeartbeat` |
 | `outbox::dedup` | `is_published(conn, event_id)`, `mark_published(conn, event_id)` — Redis-based duplicate publish prevention |
 | `outbox::processed` | `is_event_processed()`, `mark_event_processed()`, `cleanup_processed_events()` |

@@ -24,7 +24,7 @@ payment/src/
 └── outbox/                       # Uses shared outbox infrastructure
 ```
 
-Tests: `tests/payments/{repository,service,router}_test.rs` + `tests/common/mod.rs`
+Tests: `tests/payments/{repository,service,router,consumer}_test.rs` + `tests/common/mod.rs`
 
 ## Endpoints (`/api/v1/payments`)
 
@@ -47,8 +47,7 @@ Tests: `tests/payments/{repository,service,router}_test.rs` + `tests/common/mod.
 | `OrderConfirmed` | `order_events` | Capture authorized payment, write PaymentCaptured outbox |
 | `OrderCancelled` | `order_events` | Void if authorized (no-op if New/Failed) |
 
-Payment service functions have `_on_tx` variants for use within the consumer's transaction:
-`authorize_payment_on_tx`, `capture_payment_on_tx`, `void_payment_on_tx`.
+The `_on_tx` variants use a **read-call-write split**: reads on pool (connection released before gateway HTTP call), gateway call (no DB held), writes on consumer's tx. `PaymentEventHandler` holds both `PgPool` (reads) and `Arc<dyn PaymentGateway>` (gateway calls).
 
 ## Key Patterns
 
@@ -62,4 +61,11 @@ Payment service functions have `_on_tx` variants for use within the consumer's t
 
 ## Tests
 
-42 unit + 28 integration = 70 tests. `make test SERVICE=payment`
+42 unit + 37 integration = 79 tests. `make test SERVICE=payment`
+
+Test layers:
+- Ledger repository (14): accounts, transactions, entries, balances view, pending exclusion
+- Service (8): authorize/capture/void flows, tamper detection, rules
+- Router (4): payment status endpoint, auth
+- Consumer handlers (9): authorize via inventory reserved, capture via order confirmed, void on cancel, lifecycle
+- Gateway mock (2): success/fail modes
