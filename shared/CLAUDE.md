@@ -65,7 +65,7 @@ shared/src/
 
 | Module | Key exports |
 |--------|-------------|
-| `server` | `ServiceBuilder::new(name).http_port_env().db_url_env().with_redis().run(build_app)` — composable bootstrap; `.run_with_grpc()` for gRPC sidecar; `Infra { db, redis }` passed to closures |
+| `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers as background tasks; `Infra { db, redis, kafka }` passed to closures; `ConsumerRegistration { group_id, topics, handler }` |
 | `db` | `init_db() → Result`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
 | `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `PaginatedResponse<T>` (Serialize+Deserialize), `HasId` trait |

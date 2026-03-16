@@ -15,11 +15,13 @@ Products, pricing, inventory, categories (ltree hierarchy), and brands.
 
 ```
 catalog/src/
-├── main.rs / lib.rs              # AppState { pool, cache, auth_config }
+├── main.rs / lib.rs              # AppState { pool, cache, auth_config }; Kafka consumer wired via ServiceBuilder
 ├── common/value_objects.rs       # Slug, HttpUrl (shared across modules)
 ├── products/                     # 12 endpoints — domain.rs, dtos.rs, entities.rs, repository.rs, routes.rs, service.rs, value_objects.rs
 ├── categories/                   # 9 endpoints  — same structure as products
-└── brands/                       # 9 endpoints  — same structure as products
+├── brands/                       # 9 endpoints  — same structure as products
+├── inventory/                    # entities.rs, repository.rs, service.rs — reserve/release/confirm flows
+└── consumers/                    # handler.rs (CatalogEventHandler), order_events.rs — consumes orders.events topic
 ```
 
 Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` + `tests/common/mod.rs` (fixtures)
@@ -84,6 +86,16 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 - **List filters:** `category_id`, `brand_id`, `min_price`, `max_price`, `search` (`SearchQuery` VO, ILIKE), `status` (seller/me only)
 - **SQL base pattern:** `PRODUCT_LIST_SELECT` ends with `WHERE 1=1`; filters appended as `AND` clauses via `apply_product_filters()` + `keyset_paginate()` via QueryBuilder
 - **Existence checks:** `has_products`/`has_children` use `SELECT EXISTS(...)` (short-circuits on first match)
+
+## Inventory Reservations
+
+Saga-integrated inventory management for the order/payment flow:
+
+- **Schema**: `reserved_quantity` column on `skus`, `inventory_reservations` table (order_id + sku_id UNIQUE), `sku_availability` view (available = stock - reserved)
+- **Flows**: `reserve_inventory()` (atomic check + increment), `release_reservation()` (cancel path), `confirm_reservation()` (deduct from both stock and reserved)
+- **Events**: `InventoryReserved` / `InventoryReservationFailed` written to outbox on `catalog.events` topic
+- **Consumer**: `CatalogEventHandler` consumes `orders.events` — `OrderCreated` → reserve, `OrderCancelled` → release
+- **Failure path**: If reservation fails, `InventoryReservationFailed` is written on a separate transaction (main tx rolls back)
 
 ## Redis Caching
 

@@ -9,8 +9,9 @@
 | shared       | Complete             | Shared libraries                                 | —                                                 | [shared/CLAUDE.md](shared/CLAUDE.md)     |
 | identity     | Complete (84 tests)  | Auth, Users, Profiles                            | Users, Credentials, Roles                         | [identity/CLAUDE.md](identity/CLAUDE.md) |
 | catalog      | Complete (145 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md)   |
-| order        | Stub                 | Order lifecycle (state machine)                  | Orders, Order Items                               | —                                        |
-| payment      | Stub                 | Payment gateway, wallets                         | Transactions, Invoices                            | —                                        |
+| order        | Complete (79 tests)  | Order lifecycle (state machine)                  | Orders, Order Items                               | —                                        |
+| payment      | Complete (70 tests)  | Payment gateway, double-entry ledger             | Accounts, Transactions, Entries                   | —                                        |
+| cart         | Complete (59 tests)  | Shopping cart (Redis)                             | Cart Items (Redis hash)                           | —                                        |
 | shipping     | Stub                 | Logistics, tracking                              | Shipments, Carriers                               | —                                        |
 | notification | Stub                 | Emails, SMS, Push                                | Templates, Delivery Logs                          | —                                        |
 | review       | Stub                 | Product reviews                                  | Reviews                                           | —                                        |
@@ -50,7 +51,7 @@
 ## Key Shared Imports
 
 ```rust
-use shared::server::{ServiceBuilder, Infra, GrpcConfig};
+use shared::server::{ServiceBuilder, Infra, GrpcConfig, ConsumerRegistration};
 use shared::auth::jwt::{self, CurrentUser};     // jwt:: free functions (generate_access_token, validate_access_token, etc.)
 use shared::auth::middleware::AuthMiddleware;   // ::new(auth_config, getter) or ::new_claims_based(auth_config)
 use shared::auth::guards::{require_access, require_admin};
