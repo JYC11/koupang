@@ -8,10 +8,10 @@
 | ------------ | -------------------- | ------------------------------------------------ | ------------------------------------------------- | ---------------------------------------- |
 | shared       | Complete             | Shared libraries                                 | —                                                 | [shared/CLAUDE.md](shared/CLAUDE.md)     |
 | identity     | Complete (84 tests)  | Auth, Users, Profiles                            | Users, Credentials, Roles                         | [identity/CLAUDE.md](identity/CLAUDE.md) |
-| catalog      | Complete (145 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md)   |
-| order        | Complete (79 tests)  | Order lifecycle (state machine)                  | Orders, Order Items                               | —                                        |
-| payment      | Complete (70 tests)  | Payment gateway, double-entry ledger             | Accounts, Transactions, Entries                   | —                                        |
-| cart         | Complete (59 tests)  | Shopping cart (Redis)                             | Cart Items (Redis hash)                           | —                                        |
+| catalog      | Complete (138 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md)   |
+| order        | Complete (79 tests)  | Order lifecycle (state machine)                  | Orders, Order Items                               | [order/CLAUDE.md](order/CLAUDE.md)       |
+| payment      | Complete (70 tests)  | Payment gateway, double-entry ledger             | Accounts, Transactions, Entries                   | [payment/CLAUDE.md](payment/CLAUDE.md)   |
+| cart         | Complete (59 tests)  | Shopping cart (Redis)                             | Cart Items (Redis hash)                           | [cart/CLAUDE.md](cart/CLAUDE.md)         |
 | shipping     | Stub                 | Logistics, tracking                              | Shipments, Carriers                               | —                                        |
 | notification | Stub                 | Emails, SMS, Push                                | Templates, Delivery Logs                          | —                                        |
 | review       | Stub                 | Product reviews                                  | Reviews                                           | —                                        |
