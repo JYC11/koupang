@@ -1,0 +1,76 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set ServiceName = service_name | pascal_case -%}
+use shared::errors::AppError;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum {{ ServiceName }}Error {
+    ValidationFailed(String),
+    NotFound(String),
+    AccessDenied(String),
+    Infra(AppError),
+    // <ai:customize hint="Add domain-specific error variants">
+    // </ai:customize>
+}
+
+impl fmt::Display for {{ ServiceName }}Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ValidationFailed(msg) => write!(f, "Validation failed: {msg}"),
+            Self::NotFound(msg) => write!(f, "Not found: {msg}"),
+            Self::AccessDenied(msg) => write!(f, "Access denied: {msg}"),
+            Self::Infra(e) => write!(f, "{e}"),
+            // <ai:customize hint="Add Display arms for domain variants">
+            // </ai:customize>
+        }
+    }
+}
+
+impl From<AppError> for {{ ServiceName }}Error {
+    fn from(e: AppError) -> Self {
+        Self::Infra(e)
+    }
+}
+
+impl From<{{ ServiceName }}Error> for AppError {
+    fn from(e: {{ ServiceName }}Error) -> Self {
+        match e {
+            {{ ServiceName }}Error::ValidationFailed(msg) => AppError::BadRequest(msg),
+            {{ ServiceName }}Error::NotFound(msg) => AppError::NotFound(msg),
+            {{ ServiceName }}Error::AccessDenied(msg) => AppError::Forbidden(msg),
+            {{ ServiceName }}Error::Infra(e) => e,
+            // <ai:customize hint="Map domain variants to AppError">
+            // </ai:customize>
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_failed_maps_to_bad_request() {
+        let err: AppError = {{ ServiceName }}Error::ValidationFailed("bad input".to_string()).into();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn not_found_maps_to_not_found() {
+        let err: AppError = {{ ServiceName }}Error::NotFound("missing".to_string()).into();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn access_denied_maps_to_forbidden() {
+        let err: AppError = {{ ServiceName }}Error::AccessDenied("nope".to_string()).into();
+        assert!(matches!(err, AppError::Forbidden(_)));
+    }
+
+    #[test]
+    fn infra_passthrough() {
+        let err: AppError =
+            {{ ServiceName }}Error::Infra(AppError::InternalServerError("db down".to_string())).into();
+        assert!(matches!(err, AppError::InternalServerError(_)));
+    }
+}

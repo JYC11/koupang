@@ -1,0 +1,47 @@
+[generator]
+name = "test-suite"
+description = "Add test infrastructure and test files for an existing service (common/mod.rs, repo/service/router tests)"
+
+[[inputs]]
+name = "service_name"
+type = "string"
+description = "Service name in snake_case"
+required = true
+
+[[inputs]]
+name = "entity_name"
+type = "string"
+description = "Entity name in snake_case"
+required = true
+
+# ── Test infrastructure ─────────────────────────────
+
+[[actions]]
+type = "create"
+template = "integration_rs.tera"
+output = "{{ service_name }}/tests/integration.rs"
+
+[[actions]]
+type = "create"
+template = "common_mod_rs.tera"
+output = "{{ service_name }}/tests/common/mod.rs"
+
+[[actions]]
+type = "create"
+template = "entity_mod_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/mod.rs"
+
+[[actions]]
+type = "create"
+template = "repository_test_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/repository_test.rs"
+
+[[actions]]
+type = "create"
+template = "service_test_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/service_test.rs"
+
+[[actions]]
+type = "create"
+template = "router_test_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/router_test.rs"

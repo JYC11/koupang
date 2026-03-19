@@ -1,0 +1,75 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use crate::{{ EntityPlural }}::entities::{{ EntityName }}Entity;
+use serde::{Deserialize, Serialize};
+use shared::db::pagination_support::{PaginationDirection, PaginationParams, PaginationQuery};
+use shared::dto_helpers::{fmt_datetime, fmt_id};
+use shared::errors::AppError;
+use uuid::Uuid;
+
+// ── Filter DTOs ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct {{ EntityName }}FilterQuery {
+    pub limit: Option<u32>,
+    pub cursor: Option<Uuid>,
+    pub direction: Option<PaginationDirection>,
+    // <ai:customize hint="Add filter fields">
+    // </ai:customize>
+}
+
+impl {{ EntityName }}FilterQuery {
+    pub fn into_parts(self) -> (PaginationParams, {{ EntityName }}Filter) {
+        let pagination = PaginationQuery {
+            limit: self.limit,
+            cursor: self.cursor,
+            direction: self.direction,
+        };
+        let filter = {{ EntityName }}Filter {};
+        (pagination.into_params(), filter)
+    }
+}
+
+pub struct {{ EntityName }}Filter {}
+
+// ── Create Request ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Create{{ EntityName }}Req {
+    // <ai:customize hint="Add request fields">
+    // </ai:customize>
+}
+
+pub struct ValidCreate{{ EntityName }}Req {
+    // <ai:customize hint="Add validated fields (value object types)">
+    // </ai:customize>
+}
+
+impl TryFrom<Create{{ EntityName }}Req> for ValidCreate{{ EntityName }}Req {
+    type Error = AppError;
+
+    fn try_from(_req: Create{{ EntityName }}Req) -> Result<Self, Self::Error> {
+        // <ai:customize hint="Validate and convert">
+        Ok(Self {})
+        // </ai:customize>
+    }
+}
+
+// ── Response DTOs ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct {{ EntityName }}Res {
+    pub id: String,
+    pub created_at: String,
+    // <ai:customize hint="Add response fields">
+    // </ai:customize>
+}
+
+impl {{ EntityName }}Res {
+    pub fn new(entity: {{ EntityName }}Entity) -> Self {
+        Self {
+            id: fmt_id(&entity.id),
+            created_at: fmt_datetime(&entity.created_at),
+        }
+    }
+}

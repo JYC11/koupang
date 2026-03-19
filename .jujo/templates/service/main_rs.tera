@@ -1,0 +1,52 @@
+{%- set ServiceName = service_name | pascal_case -%}
+{%- set ServiceUpper = service_name | upper_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+{%- if with_consumers %}
+use {{ service_name }}::consumers::handler::{{ ServiceName }}EventHandler;
+{%- endif %}
+use {{ service_name }}::{AppState, app};
+use shared::server::ServiceBuilder;
+{%- if with_consumers %}
+use shared::server::ConsumerRegistration;
+use std::sync::Arc;
+{%- endif %}
+use std::error::Error;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    ServiceBuilder::new("{{ service_name }}")
+        .http_port_env("{{ ServiceUpper }}_PORT")
+{%- if with_db %}
+        .with_db("{{ ServiceUpper }}_DB_URL")
+{%- endif %}
+{%- if with_redis %}
+        .with_redis()
+{%- endif %}
+{%- if with_consumers %}
+        .with_consumers(|_infra| {
+            vec![ConsumerRegistration {
+                group_id: "{{ service_name }}-service".to_string(),
+                // <ai:customize hint="Add consumed topic names">
+                topics: vec![],
+                // </ai:customize>
+                handler: Arc::new({{ ServiceName }}EventHandler::new()),
+            }]
+        })
+{%- endif %}
+        .run(|infra| {
+{%- if with_db and with_redis %}
+            let app_state = AppState::new(
+                infra.require_db().clone(),
+                infra.require_redis().clone(),
+            );
+{%- elif with_db %}
+            let app_state = AppState::new(infra.require_db().clone());
+{%- elif with_redis %}
+            let app_state = AppState::new(infra.require_redis().clone());
+{%- else %}
+            let app_state = AppState::new();
+{%- endif %}
+            app(app_state)
+        })
+        .await
+}

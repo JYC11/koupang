@@ -1,0 +1,32 @@
+{%- set ServiceName = service_name | pascal_case -%}
+{%- set SourceService = source_service | pascal_case -%}
+use shared::events::{EventEnvelope, EventMetadata, EventType, SourceService, AggregateType};
+use uuid::Uuid;
+
+fn make_envelope(event_type: EventType, aggregate_id: Uuid, payload: serde_json::Value) -> EventEnvelope {
+    EventEnvelope {
+        metadata: EventMetadata {
+            event_id: Uuid::new_v4(),
+            event_type,
+            source_service: SourceService::{{ SourceService }},
+            aggregate_type: AggregateType::Order, // <ai:customize hint="Set correct aggregate type">
+            aggregate_id,
+            version: 1,
+            timestamp: chrono::Utc::now(),
+        },
+        payload,
+    }
+}
+
+// <ai:customize hint="Add consumer handler tests">
+//
+// #[tokio::test]
+// async fn handle_some_event_succeeds() {
+//     let db = crate::common::test_db().await;
+//     let mut conn = db.pool.acquire().await.unwrap();
+//     // Setup prerequisite data...
+//     let envelope = make_envelope(EventType::SomeEvent, order_id, payload);
+//     {{ source_service }}_events::handle_some_event(&mut *conn, &envelope).await.unwrap();
+//     // Assert state changes...
+// }
+// </ai:customize>

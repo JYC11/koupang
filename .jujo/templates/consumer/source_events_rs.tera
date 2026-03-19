@@ -1,0 +1,22 @@
+{%- set SourceService = source_service | pascal_case -%}
+use shared::errors::AppError;
+use shared::events::EventEnvelope;
+use sqlx::PgConnection;
+
+// <ai:customize hint="Add handler functions for events from {{ source_service }}.events topic">
+//
+// pub async fn handle_some_event(
+//     tx: &mut PgConnection,
+//     envelope: &EventEnvelope,
+// ) -> Result<(), AppError> {
+//     let payload = serde_json::from_value::<SomePayload>(envelope.payload.clone())
+//         .map_err(|e| AppError::BadRequest(format!("Invalid payload: {e}")))?;
+//
+//     // Read current state
+//     // Validate transition
+//     // Write new state
+//     // Write outbox event
+//
+//     Ok(())
+// }
+// </ai:customize>

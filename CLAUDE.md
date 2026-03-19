@@ -1,6 +1,7 @@
 # Project
 
 - an ecommerce microservice project for learning and portfolio purposes
+- should aim for production quality
 
 ## Services
 

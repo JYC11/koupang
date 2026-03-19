@@ -1,0 +1,146 @@
+[generator]
+name = "service"
+description = "Scaffold a new microservice (main.rs, lib.rs, Cargo.toml, migrations dir, test infra)"
+
+[[inputs]]
+name = "service_name"
+type = "string"
+description = "Service name in snake_case (e.g. shipping, notification)"
+required = true
+
+[[inputs]]
+name = "entity_name"
+type = "string"
+description = "Primary domain entity in snake_case (e.g. shipment, template)"
+required = true
+
+[[inputs]]
+name = "with_db"
+type = "bool"
+description = "Include Postgres via ServiceBuilder"
+required = false
+default = true
+
+[[inputs]]
+name = "with_redis"
+type = "bool"
+description = "Include Redis connection"
+required = false
+default = false
+
+[[inputs]]
+name = "with_consumers"
+type = "bool"
+description = "Include Kafka consumer wiring"
+required = false
+default = false
+
+# ── Source files ────────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "cargo_toml.tera"
+output = "{{ service_name }}/Cargo.toml"
+
+[[actions]]
+type = "create"
+template = "main_rs.tera"
+output = "{{ service_name }}/src/main.rs"
+
+[[actions]]
+type = "create"
+template = "lib_rs.tera"
+output = "{{ service_name }}/src/lib.rs"
+
+# ── Primary module ──────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "entity_mod_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/mod.rs"
+
+[[actions]]
+type = "create"
+template = "entities_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/entities.rs"
+
+[[actions]]
+type = "create"
+template = "value_objects_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/value_objects.rs"
+
+[[actions]]
+type = "create"
+template = "dtos_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/dtos.rs"
+
+[[actions]]
+type = "create"
+template = "error_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/error.rs"
+
+[[actions]]
+type = "create"
+template = "repository_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/repository.rs"
+
+[[actions]]
+type = "create"
+template = "service_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/service.rs"
+
+[[actions]]
+type = "create"
+template = "routes_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/routes.rs"
+
+# ── Consumer module (when with_consumers=true) ──────
+# These are always created when with_consumers is set;
+# the templates use conditionals internally
+
+[[actions]]
+type = "create"
+template = "consumers_mod_rs.tera"
+output = "{{ service_name }}/src/consumers/mod.rs"
+
+[[actions]]
+type = "create"
+template = "consumers_handler_rs.tera"
+output = "{{ service_name }}/src/consumers/handler.rs"
+
+# ── Test infrastructure ─────────────────────────────
+
+[[actions]]
+type = "create"
+template = "integration_rs.tera"
+output = "{{ service_name }}/tests/integration.rs"
+
+[[actions]]
+type = "create"
+template = "test_common_mod_rs.tera"
+output = "{{ service_name }}/tests/common/mod.rs"
+
+[[actions]]
+type = "create"
+template = "test_entity_mod_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/mod.rs"
+
+[[actions]]
+type = "create"
+template = "test_repository_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/repository_test.rs"
+
+[[actions]]
+type = "create"
+template = "test_service_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/service_test.rs"
+
+[[actions]]
+type = "create"
+template = "test_router_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/router_test.rs"
+
+# ── Workspace injection ─────────────────────────────
+
+# NOTE: Manually add service to workspace Cargo.toml members list
+# Jujo uses // markers but Cargo.toml needs # comments — inject won't work here

@@ -1,0 +1,60 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use crate::AppState;
+use crate::{{ EntityPlural }}::dtos::Create{{ EntityName }}Req;
+use crate::{{ EntityPlural }}::dtos::{{ EntityName }}Filter;
+use crate::{{ EntityPlural }}::dtos::{{ EntityName }}Res;
+use crate::{{ EntityPlural }}::dtos::ValidCreate{{ EntityName }}Req;
+use crate::{{ EntityPlural }}::repository;
+use crate::{{ EntityPlural }}::value_objects::{{ EntityName }}Id;
+use shared::auth::jwt::CurrentUser;
+use shared::db::pagination_support::{PaginationParams, PaginationRes, get_cursors};
+use shared::db::transaction_support::{TxError, with_transaction};
+use shared::errors::AppError;
+
+pub async fn create_{{ entity_name }}(
+    state: &AppState,
+    _current_user: &CurrentUser,
+    req: Create{{ EntityName }}Req,
+) -> Result<{{ EntityName }}Res, AppError> {
+    let validated = ValidCreate{{ EntityName }}Req::try_from(req)?;
+
+    let id = with_transaction(&state.pool, |tx| {
+        Box::pin(async move {
+            let id = repository::create_{{ entity_name }}(tx.as_executor(), &validated)
+                .await
+                .map_err(|e| TxError::Other(e.to_string()))?;
+            Ok(id)
+        })
+    })
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to create {{ entity_name }}: {}", e)))?;
+
+    let entity = repository::get_{{ entity_name }}_by_id(&state.pool, id).await?;
+    Ok({{ EntityName }}Res::new(entity))
+}
+
+pub async fn get_{{ entity_name }}(
+    state: &AppState,
+    id: {{ EntityName }}Id,
+) -> Result<{{ EntityName }}Res, AppError> {
+    let entity = repository::get_{{ entity_name }}_by_id(&state.pool, id).await?;
+    Ok({{ EntityName }}Res::new(entity))
+}
+
+pub async fn delete_{{ entity_name }}(
+    state: &AppState,
+    _current_user: &CurrentUser,
+    id: {{ EntityName }}Id,
+) -> Result<(), AppError> {
+    with_transaction(&state.pool, |tx| {
+        Box::pin(async move {
+            repository::delete_{{ entity_name }}(tx.as_executor(), id)
+                .await
+                .map_err(|e| TxError::Other(e.to_string()))?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to delete {{ entity_name }}: {}", e)))
+}

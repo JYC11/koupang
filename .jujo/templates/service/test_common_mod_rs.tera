@@ -1,0 +1,35 @@
+{%- set ServiceName = service_name | pascal_case -%}
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use {{ service_name }}::AppState;
+use shared::config::auth_config::AuthConfig;
+{%- if with_db %}
+use shared::db::PgPool;
+use shared::test_utils::db::TestDb;
+{%- endif %}
+
+{%- if with_db %}
+
+pub async fn test_db() -> TestDb {
+    TestDb::start("./migrations").await
+}
+{%- endif %}
+
+pub fn test_auth_config() -> AuthConfig {
+    AuthConfig {
+        access_token_secret: b"test-access-secret-key-for-testing".to_vec(),
+        refresh_token_secret: b"test-refresh-secret-key-for-testing".to_vec(),
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_secs: 7200,
+    }
+}
+
+{%- if with_db %}
+
+pub fn test_app_state(pool: PgPool) -> AppState {
+    AppState::new_with_jwt(pool, test_auth_config())
+}
+{%- endif %}
+
+// <ai:customize hint="Add sample fixture factories (e.g. sample_create_{{ entity_name }}_req)">
+// </ai:customize>

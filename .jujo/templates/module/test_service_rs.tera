@@ -1,0 +1,16 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use {{ service_name }}::{{ EntityPlural }}::service;
+use shared::test_utils::auth::buyer_user;
+
+#[tokio::test]
+async fn get_{{ entity_name }}_not_found() {
+    let db = crate::common::test_db().await;
+    let state = crate::common::test_app_state(db.pool.clone());
+    let id = {{ service_name }}::{{ EntityPlural }}::value_objects::{{ EntityName }}Id::new(uuid::Uuid::new_v4());
+    let result = service::get_{{ entity_name }}(&state, id).await;
+    assert!(result.is_err());
+}
+
+// <ai:customize hint="Add create/delete/list service tests">
+// </ai:customize>

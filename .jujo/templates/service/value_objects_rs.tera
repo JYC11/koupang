@@ -1,0 +1,14 @@
+{%- set EntityName = entity_name | pascal_case -%}
+shared::valid_id!({{ EntityName }}Id);
+
+// <ai:customize hint="Add value objects for {{ EntityName }} domain (status enum, validated strings, etc.)">
+// Example status enum:
+//
+// #[derive(Debug, Clone, Copy, Deserialize, Serialize, sqlx::Type)]
+// #[sqlx(type_name = "TEXT")]
+// #[serde(rename_all = "snake_case")]
+// pub enum {{ EntityName }}Status {
+//     Draft,
+//     Active,
+// }
+// </ai:customize>

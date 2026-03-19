@@ -1,0 +1,3 @@
+pub mod handler;
+pub mod {{ source_service }}_events;
+// </jujo:consumer-modules>

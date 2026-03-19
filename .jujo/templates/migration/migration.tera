@@ -1,0 +1,31 @@
+{%- if table_name %}
+{%- set TableName = table_name -%}
+CREATE TABLE {{ TableName }} (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+{%- if fields %}
+{%- for field in fields %}
+{%- if field.nullable %}
+    {{ field.name }} {{ field.mapped_type }},
+{%- else %}
+    {{ field.name }} {{ field.mapped_type }} NOT NULL,
+{%- endif %}
+{%- endfor %}
+{%- else %}
+
+    -- <ai:customize hint="Add domain columns for {{ TableName }}">
+    -- </ai:customize>
+{%- endif %}
+
+    CONSTRAINT {{ TableName }}_soft_delete UNIQUE NULLS NOT DISTINCT (id, deleted_at)
+);
+
+-- <ai:customize hint="Add indexes for common query patterns">
+-- CREATE INDEX idx_{{ TableName }}_created ON {{ TableName }}(created_at);
+-- </ai:customize>
+{%- else %}
+-- <ai:customize hint="Write migration DDL">
+-- </ai:customize>
+{%- endif %}

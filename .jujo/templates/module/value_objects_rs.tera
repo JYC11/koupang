@@ -1,0 +1,5 @@
+{%- set EntityName = entity_name | pascal_case -%}
+shared::valid_id!({{ EntityName }}Id);
+
+// <ai:customize hint="Add value objects for {{ EntityName }} domain">
+// </ai:customize>

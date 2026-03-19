@@ -1,0 +1,31 @@
+{%- set ServiceName = service_name | pascal_case -%}
+use shared::events::consumer::{EventHandler, HandlerError};
+use shared::events::EventEnvelope;
+
+/// Kafka consumer handler for {{ ServiceName }} service.
+pub struct {{ ServiceName }}EventHandler;
+
+impl Default for {{ ServiceName }}EventHandler {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl {{ ServiceName }}EventHandler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait::async_trait]
+impl EventHandler for {{ ServiceName }}EventHandler {
+    async fn handle(
+        &self,
+        _envelope: &EventEnvelope,
+        _tx: &mut sqlx::PgConnection,
+    ) -> Result<(), HandlerError> {
+        // <ai:customize hint="Match on _envelope.metadata.event_type and dispatch to handler functions">
+        Ok(())
+        // </ai:customize>
+    }
+}

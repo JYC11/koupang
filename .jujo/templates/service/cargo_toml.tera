@@ -1,0 +1,31 @@
+{%- set ServiceName = service_name | pascal_case -%}
+[package]
+name = "{{ service_name }}"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.8"
+shared = { path = "../shared" }
+tokio = { version = "1.49.0", features = ["full"] }
+{%- if with_db %}
+sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "macros", "migrate", "postgres", "chrono", "json", "uuid", "rust_decimal"] }
+{%- endif %}
+uuid = { version = "1.21.0", features = ["v4", "v7", "serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+chrono = { version = "0.4.43", features = ["serde"] }
+rust_decimal = { version = "1.4.0", features = ["serde"] }
+{%- if with_redis %}
+redis = { version = "1.0.4", features = ["tokio-comp", "connection-manager"] }
+{%- endif %}
+{%- if with_consumers %}
+rdkafka = { version = "0.37", features = ["cmake-build"] }
+async-trait = "0.1"
+{%- endif %}
+tower = "0.5.3"
+tower-http = { version = "0.6.8", features = ["trace"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+shared = { path = "../shared", features = ["test-utils"] }

@@ -1,0 +1,89 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+{%- set TableName = entity_name | pluralize -%}
+use crate::{{ EntityPlural }}::dtos::{{ EntityName }}Filter;
+use crate::{{ EntityPlural }}::dtos::ValidCreate{{ EntityName }}Req;
+use crate::{{ EntityPlural }}::entities::{{ EntityName }}Entity;
+use crate::{{ EntityPlural }}::entities::{{ EntityName }}ListEntity;
+use crate::{{ EntityPlural }}::value_objects::{{ EntityName }}Id;
+use shared::db::PgExec;
+use shared::db::pagination_support::{PaginationParams, keyset_paginate};
+use shared::errors::AppError;
+use sqlx::{PgConnection, Postgres, QueryBuilder};
+
+// ── Read queries ────────────────────────────────────────────
+
+pub async fn get_{{ entity_name }}_by_id<'e>(
+    executor: impl PgExec<'e>,
+    id: {{ EntityName }}Id,
+) -> Result<{{ EntityName }}Entity, AppError> {
+    sqlx::query_as::<_, {{ EntityName }}Entity>(
+        "SELECT * FROM {{ TableName }} WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id.value())
+    .fetch_one(executor)
+    .await
+    .map_err(|e| AppError::NotFound(format!("{{ EntityName }} not found: {}", e)))
+}
+
+const {{ EntityName | upper_case }}_LIST_SELECT: &str = "\
+    SELECT t.id, t.created_at \
+    FROM {{ TableName }} t \
+    WHERE t.deleted_at IS NULL";
+
+fn apply_{{ entity_name }}_filters(
+    _qb: &mut QueryBuilder<Postgres>,
+    _filter: &{{ EntityName }}Filter,
+) {
+    // <ai:customize hint="Add filter conditions: if let Some(ref x) = filter.x { qb.push(...) }">
+    // </ai:customize>
+}
+
+pub async fn list_{{ EntityPlural }}<'e>(
+    executor: impl PgExec<'e>,
+    params: &PaginationParams,
+    filter: &{{ EntityName }}Filter,
+) -> Result<Vec<{{ EntityName }}ListEntity>, AppError> {
+    let mut qb = QueryBuilder::new({{ EntityName | upper_case }}_LIST_SELECT);
+    apply_{{ entity_name }}_filters(&mut qb, filter);
+    keyset_paginate(params, Some("t"), &mut qb);
+    qb.build_query_as::<{{ EntityName }}ListEntity>()
+        .fetch_all(executor)
+        .await
+        .map_err(|e| AppError::InternalServerError(format!("Failed to list {{ EntityPlural }}: {}", e)))
+}
+
+// ── Write queries ───────────────────────────────────────────
+
+pub async fn create_{{ entity_name }}(
+    tx: &mut PgConnection,
+    _req: &ValidCreate{{ EntityName }}Req,
+) -> Result<{{ EntityName }}Id, AppError> {
+    // <ai:customize hint="INSERT INTO {{ TableName }} (...) VALUES (...) RETURNING id">
+    let row: (sqlx::types::Uuid,) = sqlx::query_as(
+        "INSERT INTO {{ TableName }} (id) VALUES (gen_random_uuid()) RETURNING id",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to create {{ entity_name }}: {}", e)))?;
+    Ok({{ EntityName }}Id::new(row.0))
+    // </ai:customize>
+}
+
+pub async fn delete_{{ entity_name }}(
+    tx: &mut PgConnection,
+    id: {{ EntityName }}Id,
+) -> Result<(), AppError> {
+    let result = sqlx::query(
+        "UPDATE {{ TableName }} SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id.value())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AppError::InternalServerError(format!("Failed to delete {{ entity_name }}: {}", e)))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("{{ EntityName }} not found".to_string()));
+    }
+    Ok(())
+}

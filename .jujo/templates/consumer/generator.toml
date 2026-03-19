@@ -1,0 +1,47 @@
+[generator]
+name = "consumer"
+description = "Add Kafka consumer handler module to an existing service (EventHandler impl, event handler files)"
+
+[[inputs]]
+name = "service_name"
+type = "string"
+description = "Service name in snake_case (e.g. order, payment)"
+required = true
+
+[[inputs]]
+name = "source_service"
+type = "string"
+description = "Source service whose events are consumed (e.g. catalog, order)"
+required = true
+
+# ── Consumer files ──────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "consumers_mod_rs.tera"
+output = "{{ service_name }}/src/consumers/mod.rs"
+
+[[actions]]
+type = "create"
+template = "handler_rs.tera"
+output = "{{ service_name }}/src/consumers/handler.rs"
+
+[[actions]]
+type = "create"
+template = "source_events_rs.tera"
+output = "{{ service_name }}/src/consumers/{{ source_service }}_events.rs"
+
+# ── Inject modules into lib.rs ──────────────────────
+
+[[actions]]
+type = "inject"
+target = "{{ service_name }}/src/lib.rs"
+marker = "modules"
+content = "pub mod consumers;"
+
+# ── Consumer test ───────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "test_consumer_rs.tera"
+output = "{{ service_name }}/tests/{{ service_name }}/consumer_test.rs"

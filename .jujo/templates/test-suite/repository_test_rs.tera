@@ -1,0 +1,29 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use {{ service_name }}::{{ EntityPlural }}::repository;
+
+#[tokio::test]
+async fn create_{{ entity_name }}_succeeds() {
+    let db = crate::common::test_db().await;
+    let mut conn = db.pool.acquire().await.unwrap();
+    // <ai:customize hint="Test create_{{ entity_name }}">
+    todo!()
+    // </ai:customize>
+}
+
+#[tokio::test]
+async fn get_{{ entity_name }}_not_found() {
+    let db = crate::common::test_db().await;
+    let id = {{ service_name }}::{{ EntityPlural }}::value_objects::{{ EntityName }}Id::new(uuid::Uuid::new_v4());
+    let result = repository::get_{{ entity_name }}_by_id(&db.pool, id).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn delete_nonexistent_fails() {
+    let db = crate::common::test_db().await;
+    let mut conn = db.pool.acquire().await.unwrap();
+    let id = {{ service_name }}::{{ EntityPlural }}::value_objects::{{ EntityName }}Id::new(uuid::Uuid::new_v4());
+    let result = repository::delete_{{ entity_name }}(&mut *conn, id).await;
+    assert!(result.is_err());
+}

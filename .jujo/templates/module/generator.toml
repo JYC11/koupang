@@ -1,0 +1,95 @@
+[generator]
+name = "module"
+description = "Add a new domain module to an existing service (entities, dtos, VOs, repo, service, routes, error, tests)"
+
+[[inputs]]
+name = "service_name"
+type = "string"
+description = "Existing service name in snake_case (e.g. catalog, order)"
+required = true
+
+[[inputs]]
+name = "entity_name"
+type = "string"
+description = "New entity name in snake_case (e.g. brand, category)"
+required = true
+
+# ── Module files ────────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "mod_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/mod.rs"
+
+[[actions]]
+type = "create"
+template = "entities_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/entities.rs"
+
+[[actions]]
+type = "create"
+template = "value_objects_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/value_objects.rs"
+
+[[actions]]
+type = "create"
+template = "dtos_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/dtos.rs"
+
+[[actions]]
+type = "create"
+template = "error_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/error.rs"
+
+[[actions]]
+type = "create"
+template = "repository_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/repository.rs"
+
+[[actions]]
+type = "create"
+template = "service_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/service.rs"
+
+[[actions]]
+type = "create"
+template = "routes_rs.tera"
+output = "{{ service_name }}/src/{{ entity_name | pluralize }}/routes.rs"
+
+# ── Inject module declaration into lib.rs ───────────
+
+[[actions]]
+type = "inject"
+target = "{{ service_name }}/src/lib.rs"
+marker = "modules"
+content = "pub mod {{ entity_name | pluralize }};"
+
+# ── Test files ──────────────────────────────────────
+
+[[actions]]
+type = "create"
+template = "test_mod_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/mod.rs"
+
+[[actions]]
+type = "create"
+template = "test_repository_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/repository_test.rs"
+
+[[actions]]
+type = "create"
+template = "test_service_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/service_test.rs"
+
+[[actions]]
+type = "create"
+template = "test_router_rs.tera"
+output = "{{ service_name }}/tests/{{ entity_name | pluralize }}/router_test.rs"
+
+# ── Inject test module into integration.rs ──────────
+
+[[actions]]
+type = "inject"
+target = "{{ service_name }}/tests/integration.rs"
+marker = "test-modules"
+content = "mod {{ entity_name | pluralize }};"

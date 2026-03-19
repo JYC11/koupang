@@ -11,5 +11,6 @@ members = [
     "shipping",
     "notification",
     "review",
-    "moderation"
+    "moderation",
+    # </jujo:workspace-members>
 ]

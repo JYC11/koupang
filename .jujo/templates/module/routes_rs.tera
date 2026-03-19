@@ -1,0 +1,83 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    response::IntoResponse,
+    routing::{get, post},
+};
+use uuid::Uuid;
+
+use crate::AppState;
+use crate::{{ EntityPlural }}::dtos::{Create{{ EntityName }}Req, {{ EntityName }}FilterQuery, {{ EntityName }}Res};
+use crate::{{ EntityPlural }}::service;
+use crate::{{ EntityPlural }}::value_objects::{{ EntityName }}Id;
+use shared::auth::jwt::CurrentUser;
+use shared::auth::middleware::AuthMiddleware;
+use shared::db::pagination_support::PaginatedResponse;
+use shared::errors::AppError;
+use shared::responses;
+use axum::http::StatusCode;
+
+pub fn {{ entity_name }}_routes(app_state: AppState) -> Router {
+    let auth_middleware = AuthMiddleware::new_claims_based(app_state.auth_config.clone());
+
+    let public_routes = Router::new()
+        .route("/", get(list_{{ EntityPlural }}))
+        .route("/{id}", get(get_{{ entity_name }}));
+
+    let protected_routes = Router::new()
+        .route("/", post(create_{{ entity_name }}))
+        .route("/{id}", axum::routing::delete(delete_{{ entity_name }}))
+        .layer(axum::middleware::from_fn(move |req, next| {
+            auth_middleware.clone().handle(req, next)
+        }));
+
+    Router::new()
+        .nest(
+            "/api/v1/{{ EntityPlural }}",
+            public_routes.merge(protected_routes),
+        )
+        .with_state(app_state)
+}
+
+async fn create_{{ entity_name }}(
+    State(state): State<AppState>,
+    current_user: CurrentUser,
+    Json(req): Json<Create{{ EntityName }}Req>,
+) -> Result<impl IntoResponse, AppError> {
+    let res = service::create_{{ entity_name }}(&state, &current_user, req).await?;
+    Ok((StatusCode::CREATED, Json(res)))
+}
+
+async fn get_{{ entity_name }}(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<{{ EntityName }}Res>, AppError> {
+    let entity_id = {{ EntityName }}Id::new(id);
+    let res = service::get_{{ entity_name }}(&state, entity_id).await?;
+    Ok(Json(res))
+}
+
+async fn list_{{ EntityPlural }}(
+    State(state): State<AppState>,
+    Query(query): Query<{{ EntityName }}FilterQuery>,
+) -> Result<Json<PaginatedResponse<{{ EntityName }}Res>>, AppError> {
+    let (params, filter) = query.into_parts();
+    // <ai:customize hint="Call appropriate service::list function">
+    todo!()
+    // </ai:customize>
+}
+
+async fn delete_{{ entity_name }}(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    current_user: CurrentUser,
+) -> Result<impl IntoResponse, AppError> {
+    let entity_id = {{ EntityName }}Id::new(id);
+    service::delete_{{ entity_name }}(&state, &current_user, entity_id).await?;
+    Ok(responses::success(
+        axum::http::StatusCode::OK,
+        "{{ EntityName }} deleted successfully",
+    ))
+}

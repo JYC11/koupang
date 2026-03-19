@@ -1,0 +1,36 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+{%- set TableName = entity_name | pluralize -%}
+use shared::db::pagination_support::HasId;
+use sqlx::FromRow;
+use sqlx::types::Uuid;
+use sqlx::types::chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, FromRow)]
+pub struct {{ EntityName }}Entity {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: Option<DateTime<Utc>>,
+    // <ai:customize hint="Add domain columns for {{ TableName }} table">
+    // </ai:customize>
+}
+
+impl HasId for {{ EntityName }}Entity {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct {{ EntityName }}ListEntity {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    // <ai:customize hint="Add list-view columns (subset of full entity)">
+    // </ai:customize>
+}
+
+impl HasId for {{ EntityName }}ListEntity {
+    fn id(&self) -> Uuid {
+        self.id
+    }
+}

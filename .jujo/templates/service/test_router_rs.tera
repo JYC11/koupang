@@ -1,0 +1,51 @@
+{%- set EntityName = entity_name | pascal_case -%}
+{%- set EntityPlural = entity_name | pluralize -%}
+use axum::http::StatusCode;
+use shared::test_utils::auth::{buyer_user, test_token};
+use shared::test_utils::http::{authed_get, body_json};
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn get_{{ entity_name }}_returns_404_when_not_found() {
+    let db = crate::common::test_db().await;
+    let state = crate::common::test_app_state(db.pool.clone());
+    let app = {{ service_name }}::app(state);
+    let user = buyer_user();
+    let token = test_token(&user, &crate::common::test_auth_config());
+
+    let id = uuid::Uuid::new_v4();
+    let request = authed_get(&format!("/api/v1/{{ EntityPlural }}/{id}"), &token);
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn list_{{ EntityPlural }}_returns_empty_array() {
+    let db = crate::common::test_db().await;
+    let state = crate::common::test_app_state(db.pool.clone());
+    let app = {{ service_name }}::app(state);
+
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/api/v1/{{ EntityPlural }}")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn create_{{ entity_name }}_requires_auth() {
+    let db = crate::common::test_db().await;
+    let state = crate::common::test_app_state(db.pool.clone());
+    let app = {{ service_name }}::app(state);
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/v1/{{ EntityPlural }}")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from("{}"))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

@@ -1,0 +1,4 @@
+{%- set EntityPlural = entity_name | pluralize -%}
+mod common;
+mod {{ EntityPlural }};
+// </jujo:test-modules>

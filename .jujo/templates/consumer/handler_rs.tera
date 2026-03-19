@@ -1,0 +1,42 @@
+{%- set ServiceName = service_name | pascal_case -%}
+{%- set SourceService = source_service | pascal_case -%}
+use crate::consumers::{{ source_service }}_events;
+use shared::consumer::EventHandler;
+use shared::consumer::handler_error::HandlerError;
+use shared::db::PgPool;
+use shared::events::{EventEnvelope, EventType};
+
+/// Kafka consumer handler for {{ ServiceName }} service.
+pub struct {{ ServiceName }}EventHandler {
+    pool: Option<PgPool>,
+}
+
+impl {{ ServiceName }}EventHandler {
+    pub fn new() -> Self {
+        Self { pool: None }
+    }
+
+    pub fn with_pool(pool: PgPool) -> Self {
+        Self { pool: Some(pool) }
+    }
+}
+
+#[async_trait::async_trait]
+impl EventHandler for {{ ServiceName }}EventHandler {
+    async fn handle(
+        &self,
+        envelope: &EventEnvelope,
+        tx: &mut sqlx::PgConnection,
+    ) -> Result<(), HandlerError> {
+        match envelope.metadata.event_type {
+            // <ai:customize hint="Match event types from {{ source_service }}.events and dispatch to handler functions">
+            // EventType::SomeEvent => {
+            //     {{ source_service }}_events::handle_some_event(tx, envelope)
+            //         .await
+            //         .map_err(|e| HandlerError::transient(e.to_string()))
+            // }
+            // </ai:customize>
+            _ => Ok(()), // Ignore unknown events
+        }
+    }
+}

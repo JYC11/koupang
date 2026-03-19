@@ -1,0 +1,32 @@
+[generator]
+name = "migration"
+description = "Create a timestamped SQL migration with standard table schema"
+
+[[inputs]]
+name = "service_name"
+type = "string"
+description = "Service directory name (e.g. order, catalog)"
+required = true
+
+[[inputs]]
+name = "migration_name"
+type = "string"
+description = "Migration name in snake_case (e.g. init, add_tracking)"
+required = true
+
+[[inputs]]
+name = "table_name"
+type = "string"
+description = "Primary table name (e.g. shipments, reviews)"
+required = false
+
+[[inputs]]
+name = "fields"
+type = "field[]"
+description = "Table columns as name:type pairs (e.g. title:string,amount:decimal?)"
+required = false
+
+[[actions]]
+type = "create"
+template = "migration.tera"
+output = "{{ service_name }}/migrations/{{ migration_name }}.sql"

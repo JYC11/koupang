@@ -1,0 +1,71 @@
+{%- set EntityName = entity_name | pascal_case -%}
+use shared::errors::AppError;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum {{ EntityName }}Error {
+    ValidationFailed(String),
+    NotFound(String),
+    AccessDenied(String),
+    Infra(AppError),
+    // <ai:customize hint="Add domain-specific error variants">
+    // </ai:customize>
+}
+
+impl fmt::Display for {{ EntityName }}Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ValidationFailed(msg) => write!(f, "Validation failed: {msg}"),
+            Self::NotFound(msg) => write!(f, "Not found: {msg}"),
+            Self::AccessDenied(msg) => write!(f, "Access denied: {msg}"),
+            Self::Infra(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<AppError> for {{ EntityName }}Error {
+    fn from(e: AppError) -> Self {
+        Self::Infra(e)
+    }
+}
+
+impl From<{{ EntityName }}Error> for AppError {
+    fn from(e: {{ EntityName }}Error) -> Self {
+        match e {
+            {{ EntityName }}Error::ValidationFailed(msg) => AppError::BadRequest(msg),
+            {{ EntityName }}Error::NotFound(msg) => AppError::NotFound(msg),
+            {{ EntityName }}Error::AccessDenied(msg) => AppError::Forbidden(msg),
+            {{ EntityName }}Error::Infra(e) => e,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_failed_maps_to_bad_request() {
+        let err: AppError = {{ EntityName }}Error::ValidationFailed("bad".to_string()).into();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn not_found_maps_to_not_found() {
+        let err: AppError = {{ EntityName }}Error::NotFound("missing".to_string()).into();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn access_denied_maps_to_forbidden() {
+        let err: AppError = {{ EntityName }}Error::AccessDenied("nope".to_string()).into();
+        assert!(matches!(err, AppError::Forbidden(_)));
+    }
+
+    #[test]
+    fn infra_passthrough() {
+        let err: AppError =
+            {{ EntityName }}Error::Infra(AppError::InternalServerError("db".to_string())).into();
+        assert!(matches!(err, AppError::InternalServerError(_)));
+    }
+}

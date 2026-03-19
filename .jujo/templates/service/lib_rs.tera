@@ -1,0 +1,73 @@
+{%- set EntityPlural = entity_name | pluralize -%}
+use shared::config::auth_config::AuthConfig;
+{%- if with_db %}
+use shared::db::PgPool;
+{%- endif %}
+
+{%- if with_consumers %}
+pub mod consumers;
+{%- endif %}
+pub mod {{ EntityPlural }};
+
+#[derive(Clone)]
+pub struct AppState {
+{%- if with_db %}
+    pub pool: PgPool,
+{%- endif %}
+{%- if with_redis %}
+    pub redis: redis::aio::ConnectionManager,
+{%- endif %}
+    pub auth_config: AuthConfig,
+}
+
+impl AppState {
+{%- if with_db and with_redis %}
+    pub fn new(pool: PgPool, redis: redis::aio::ConnectionManager) -> Self {
+        Self {
+            pool,
+            redis,
+            auth_config: AuthConfig::new(),
+        }
+    }
+
+    pub fn new_with_jwt(pool: PgPool, redis: redis::aio::ConnectionManager, auth_config: AuthConfig) -> Self {
+        Self { pool, redis, auth_config }
+    }
+{%- elif with_db %}
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            auth_config: AuthConfig::new(),
+        }
+    }
+
+    pub fn new_with_jwt(pool: PgPool, auth_config: AuthConfig) -> Self {
+        Self { pool, auth_config }
+    }
+{%- elif with_redis %}
+    pub fn new(redis: redis::aio::ConnectionManager) -> Self {
+        Self {
+            redis,
+            auth_config: AuthConfig::new(),
+        }
+    }
+
+    pub fn new_with_jwt(redis: redis::aio::ConnectionManager, auth_config: AuthConfig) -> Self {
+        Self { redis, auth_config }
+    }
+{%- else %}
+    pub fn new() -> Self {
+        Self {
+            auth_config: AuthConfig::new(),
+        }
+    }
+
+    pub fn new_with_jwt(auth_config: AuthConfig) -> Self {
+        Self { auth_config }
+    }
+{%- endif %}
+}
+
+pub fn app(app_state: AppState) -> axum::Router {
+    {{ EntityPlural }}::routes::{{ entity_name }}_routes(app_state)
+}
