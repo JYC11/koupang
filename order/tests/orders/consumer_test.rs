@@ -1,85 +1,13 @@
 use order::consumers::inventory_events;
 use order::consumers::payment_events;
-use order::orders::dtos::ValidCreateOrderReq;
 use order::orders::repository;
 use order::orders::value_objects::{OrderId, OrderStatus};
-use shared::events::{AggregateType, EventEnvelope, EventMetadata, EventType, SourceService};
+use order::test_fixtures::{advance_order_to, create_test_order};
+use shared::events::EventType;
+use shared::test_utils::events::make_envelope;
 use uuid::Uuid;
 
-use crate::common::{sample_create_order_req, test_db};
-
-/// Create an order in the database and return (order_id, buyer_id).
-async fn create_test_order(pool: &shared::db::PgPool) -> (Uuid, Uuid) {
-    let seller_id = Uuid::new_v4();
-    let buyer_id = Uuid::new_v4();
-    let req = sample_create_order_req(seller_id);
-    let validated =
-        ValidCreateOrderReq::new(&format!("test-{}", Uuid::new_v4()), req).expect("valid req");
-
-    let mut conn = pool.acquire().await.unwrap();
-    let order_id = repository::create_order(&mut *conn, buyer_id, &validated)
-        .await
-        .unwrap();
-
-    (order_id.value(), buyer_id)
-}
-
-/// Transition an order to a specific status by walking through the state machine.
-async fn advance_order_to(pool: &shared::db::PgPool, order_id: OrderId, target: &OrderStatus) {
-    let path = match target {
-        OrderStatus::InventoryReserved => vec![OrderStatus::InventoryReserved],
-        OrderStatus::PaymentAuthorized => {
-            vec![
-                OrderStatus::InventoryReserved,
-                OrderStatus::PaymentAuthorized,
-            ]
-        }
-        OrderStatus::Confirmed => vec![
-            OrderStatus::InventoryReserved,
-            OrderStatus::PaymentAuthorized,
-            OrderStatus::Confirmed,
-        ],
-        _ => vec![],
-    };
-
-    let mut conn = pool.acquire().await.unwrap();
-    for status in path {
-        repository::update_order_status(&mut *conn, order_id, &status, None)
-            .await
-            .unwrap();
-    }
-}
-
-fn make_envelope(event_type: EventType, order_id: Uuid, extra: serde_json::Value) -> EventEnvelope {
-    let source = match event_type {
-        EventType::InventoryReserved | EventType::InventoryReservationFailed => {
-            SourceService::Catalog
-        }
-        EventType::PaymentAuthorized | EventType::PaymentFailed | EventType::PaymentTimedOut => {
-            SourceService::Payment
-        }
-        _ => SourceService::Order,
-    };
-    let aggregate_type = match event_type {
-        EventType::InventoryReserved | EventType::InventoryReservationFailed => {
-            AggregateType::Inventory
-        }
-        EventType::PaymentAuthorized | EventType::PaymentFailed | EventType::PaymentTimedOut => {
-            AggregateType::Payment
-        }
-        _ => AggregateType::Order,
-    };
-
-    let mut payload = serde_json::json!({ "order_id": order_id.to_string() });
-    if let serde_json::Value::Object(map) = extra {
-        for (k, v) in map {
-            payload[k] = v;
-        }
-    }
-
-    let metadata = EventMetadata::new(event_type, aggregate_type, order_id, source);
-    EventEnvelope::new(metadata, payload)
-}
+use crate::common::test_db;
 
 // ── handle_inventory_reserved ─────────────────────────────────
 

@@ -1,0 +1,22 @@
+[package]
+name = "saga-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# This crate has no library — it exists only for integration tests.
+# The [[test]] target discovers tests/saga_test.rs automatically.
+
+[dependencies]
+order = { path = "../order", features = ["test-utils"] }
+catalog = { path = "../catalog", features = ["test-utils"] }
+payment = { path = "../payment" }
+shared = { path = "../shared", features = ["test-utils"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "macros", "migrate", "postgres", "uuid", "chrono", "json", "rust_decimal"] }
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-stream = "0.1"
+uuid = { version = "1.21.0", features = ["v4", "v7"] }
+chrono = { version = "0.4.43", features = ["serde"] }
+serde_json = "1.0.149"
+rust_decimal = "1.4.0"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

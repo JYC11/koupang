@@ -1,3 +1,4 @@
+use crate::gateway::traits::GatewayError;
 use crate::ledger::value_objects::PaymentState;
 use rust_decimal::Decimal;
 use shared::errors::AppError;
@@ -15,7 +16,16 @@ pub enum PaymentError {
         approved: Decimal,
     },
     NotFound(String),
-    GatewayError(String),
+    /// Non-retryable gateway decline (card declined, insufficient funds).
+    GatewayDeclined {
+        code: String,
+        message: String,
+    },
+    /// Retryable gateway failure (timeout, 503).
+    GatewayRetryable {
+        code: String,
+        message: String,
+    },
     Infra(AppError),
 }
 
@@ -36,7 +46,12 @@ impl fmt::Display for PaymentError {
                 )
             }
             Self::NotFound(msg) => write!(f, "Not found: {msg}"),
-            Self::GatewayError(msg) => write!(f, "Gateway error: {msg}"),
+            Self::GatewayDeclined { code, message } => {
+                write!(f, "Gateway declined [{code}]: {message}")
+            }
+            Self::GatewayRetryable { code, message } => {
+                write!(f, "Gateway retryable error [{code}]: {message}")
+            }
             Self::Infra(e) => write!(f, "{e}"),
         }
     }
@@ -45,6 +60,22 @@ impl fmt::Display for PaymentError {
 impl From<AppError> for PaymentError {
     fn from(e: AppError) -> Self {
         Self::Infra(e)
+    }
+}
+
+impl From<GatewayError> for PaymentError {
+    fn from(e: GatewayError) -> Self {
+        if e.is_retryable {
+            Self::GatewayRetryable {
+                code: e.code,
+                message: e.message,
+            }
+        } else {
+            Self::GatewayDeclined {
+                code: e.code,
+                message: e.message,
+            }
+        }
     }
 }
 
@@ -62,8 +93,11 @@ impl From<PaymentError> for AppError {
                 "Amount tampering detected: requested={requested}, approved={approved}"
             )),
             PaymentError::NotFound(msg) => AppError::NotFound(msg),
-            PaymentError::GatewayError(msg) => {
-                AppError::InternalServerError(format!("Gateway error: {msg}"))
+            PaymentError::GatewayDeclined { code, message } => {
+                AppError::BadRequest(format!("Gateway declined [{code}]: {message}"))
+            }
+            PaymentError::GatewayRetryable { code, message } => {
+                AppError::InternalServerError(format!("Gateway error [{code}]: {message}"))
             }
             PaymentError::Infra(e) => e,
         }
@@ -103,9 +137,39 @@ mod tests {
     }
 
     #[test]
-    fn gateway_error_maps_to_internal() {
-        let err: AppError = PaymentError::GatewayError("timeout".to_string()).into();
+    fn gateway_declined_maps_to_bad_request() {
+        let err: AppError = PaymentError::GatewayDeclined {
+            code: "DECLINED".to_string(),
+            message: "Card declined".to_string(),
+        }
+        .into();
+        assert!(matches!(err, AppError::BadRequest(_)));
+        assert!(err.to_string().contains("DECLINED"));
+    }
+
+    #[test]
+    fn gateway_retryable_maps_to_internal() {
+        let err: AppError = PaymentError::GatewayRetryable {
+            code: "TIMEOUT".to_string(),
+            message: "Gateway timed out".to_string(),
+        }
+        .into();
         assert!(matches!(err, AppError::InternalServerError(_)));
+        assert!(err.to_string().contains("TIMEOUT"));
+    }
+
+    #[test]
+    fn from_gateway_error_retryable() {
+        let gw_err = GatewayError::timeout("timed out");
+        let pe: PaymentError = gw_err.into();
+        assert!(matches!(pe, PaymentError::GatewayRetryable { .. }));
+    }
+
+    #[test]
+    fn from_gateway_error_declined() {
+        let gw_err = GatewayError::declined("insufficient funds");
+        let pe: PaymentError = gw_err.into();
+        assert!(matches!(pe, PaymentError::GatewayDeclined { .. }));
     }
 
     #[test]

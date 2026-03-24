@@ -6,6 +6,8 @@ pub mod events;
 pub mod orders;
 pub mod outbox;
 
+pub mod test_fixtures;
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,

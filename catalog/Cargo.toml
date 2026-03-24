@@ -21,5 +21,8 @@ redis = { version = "1.0.4", features = ["tokio-comp", "connection-manager"] }
 regex = "1"
 once_cell = "1"
 
+[features]
+test-utils = ["shared/test-utils"]
+
 [dev-dependencies]
 shared = { path = "../shared", features = ["test-utils"] }

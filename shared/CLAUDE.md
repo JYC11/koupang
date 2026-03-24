@@ -14,6 +14,7 @@ shared/src/
 ├── responses.rs               # ok(), success(), created()
 ├── rules.rs                   # Rule<A> algebra — composable business rules as data (ADR-012)
 ├── dto_helpers.rs             # fmt_id(), fmt_datetime(), fmt_datetime_opt()
+├── distributed_lock.rs        # DistributedLock, LockGuard, LockError — Redis SETNX + Lua atomic release
 ├── auth/
 │   ├── jwt.rs                 # jwt:: free functions (generate/validate tokens), CurrentUser, AccessTokenClaims, JwtTokens
 │   ├── middleware.rs          # AuthMiddleware (::new for identity, ::new_claims_based for others)
@@ -78,6 +79,7 @@ shared/src/
 | `rules` | `Rule<A>` (`Check`, `All`, `Any`, `Not`), `RuleResult<A>` (`Pass`, `Fail`, `AllOf`, `AnyOf`, `Negated`). Interpreters: `evaluate()`, `evaluate_detailed()`, `describe()`, `collect_checks()`, `collect_failures()`, `failure_messages()`. ADR-012. |
 | `new_types::money` | `Price` (non-negative Decimal), `Currency` (3-letter ISO 4217), `Money` (Price+Currency pair, `same_currency()`) |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
+| `distributed_lock` | `DistributedLock::new(conn)`, `.acquire(key, ttl)`, `.acquire_with_retry(key, ttl, config)` → `Result<LockGuard, LockError>`; `LockGuard::release()` via Lua atomic check-and-delete; `RetryConfig { max_attempts, retry_delay }` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope` (`.payload_uuid(field)` helper), `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |
 | `outbox` | `OutboxInsert::from_envelope(topic, envelope)`, `insert_outbox_event()`, `claim_batch()`, `mark_published()`, `mark_retry_or_failed()`, `RelayConfig`, `FailureEscalation` trait, `OutboxRelay` (`.with_redis()` for dedup), `RelayHeartbeat` |
@@ -100,6 +102,7 @@ shared/src/
 | `test_utils::redis::TestRedis::start()` | Shared Redis container; `FLUSHDB` per test for isolation |
 | `test_utils::kafka::TestKafka::start()` | Shared Kafka container (KRaft); topic isolation via unique names |
 | `test_utils::kafka::TestConsumer::new(brokers, topic)` | Kafka consumer with retry on transient errors; `.recv()` → `ReceivedMessage` |
+| `test_utils::events::make_envelope(event_type, aggregate_id, extra)` | Test envelope builder; auto-derives source_service and aggregate_type from event_type |
 
 ## Transactional Outbox (events + outbox modules)
 

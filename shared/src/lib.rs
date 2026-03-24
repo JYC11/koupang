@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cache;
 pub mod config;
 pub mod db;
+pub mod distributed_lock;
 pub mod dto_helpers;
 pub mod email;
 pub mod errors;

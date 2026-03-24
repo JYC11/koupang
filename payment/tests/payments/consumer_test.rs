@@ -5,32 +5,11 @@ use payment::ledger::repository;
 use payment::ledger::value_objects::PaymentState;
 use payment::payments::service;
 use rust_decimal::Decimal;
-use shared::events::{AggregateType, EventEnvelope, EventMetadata, EventType, SourceService};
+use shared::events::EventType;
+use shared::test_utils::events::make_envelope;
 use uuid::Uuid;
 
 use crate::common::{test_app_state, test_db};
-
-fn make_envelope(event_type: EventType, order_id: Uuid, extra: serde_json::Value) -> EventEnvelope {
-    let (source, agg_type) = match event_type {
-        EventType::InventoryReserved | EventType::InventoryReservationFailed => {
-            (SourceService::Catalog, AggregateType::Inventory)
-        }
-        EventType::OrderConfirmed | EventType::OrderCancelled => {
-            (SourceService::Order, AggregateType::Order)
-        }
-        _ => (SourceService::Payment, AggregateType::Payment),
-    };
-
-    let mut payload = serde_json::json!({ "order_id": order_id.to_string() });
-    if let serde_json::Value::Object(map) = extra {
-        for (k, v) in map {
-            payload[k] = v;
-        }
-    }
-
-    let metadata = EventMetadata::new(event_type, agg_type, order_id, source);
-    EventEnvelope::new(metadata, payload)
-}
 
 // ── handle_inventory_reserved (authorize payment) ─────────────
 
@@ -383,4 +362,218 @@ async fn full_lifecycle_authorize_then_capture_through_consumers() {
 
     let events: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
     assert_eq!(events, vec!["PaymentAuthorized", "PaymentCaptured"]);
+}
+
+// ── capture retry via outbox ────────────────────────────────────
+
+#[tokio::test]
+async fn retryable_capture_failure_writes_retry_event() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let order_id = Uuid::now_v7();
+    let amount = Decimal::new(5000, 2);
+
+    // Authorize first (succeeds).
+    let good_gw = MockPaymentGateway::always_succeeds();
+    service::authorize_payment(&state, &good_gw, order_id, amount, "USD")
+        .await
+        .unwrap();
+
+    // Capture with retryable failure.
+    let bad_gw = MockPaymentGateway::always_fails_retryable();
+    let envelope = make_envelope(EventType::OrderConfirmed, order_id, serde_json::json!({}));
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    order_events::handle_order_confirmed(&mut *conn, &db.pool, &bad_gw, &envelope)
+        .await
+        .unwrap(); // Returns Ok — retry written to outbox.
+
+    // Payment should still be Authorized (not Captured, not Failed).
+    let txs = repository::list_transactions_by_order(&db.pool, order_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository::derive_payment_state(&txs),
+        PaymentState::Authorized
+    );
+
+    // PaymentCaptureRetryRequested outbox event should exist.
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PaymentCaptureRetryRequested' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, 1, "should write retry event to outbox");
+}
+
+#[tokio::test]
+async fn non_retryable_capture_failure_writes_payment_failed() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let order_id = Uuid::now_v7();
+    let amount = Decimal::new(5000, 2);
+
+    let good_gw = MockPaymentGateway::always_succeeds();
+    service::authorize_payment(&state, &good_gw, order_id, amount, "USD")
+        .await
+        .unwrap();
+
+    // Capture with non-retryable failure (decline).
+    let bad_gw = MockPaymentGateway::always_fails();
+    let envelope = make_envelope(EventType::OrderConfirmed, order_id, serde_json::json!({}));
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    order_events::handle_order_confirmed(&mut *conn, &db.pool, &bad_gw, &envelope)
+        .await
+        .unwrap(); // Returns Ok — PaymentFailed written.
+
+    // PaymentFailed outbox event.
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PaymentFailed' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row.0, 1,
+        "should write PaymentFailed on non-retryable failure"
+    );
+}
+
+#[tokio::test]
+async fn capture_retry_handler_succeeds_on_recovery() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let order_id = Uuid::now_v7();
+    let amount = Decimal::new(5000, 2);
+
+    let good_gw = MockPaymentGateway::always_succeeds();
+    service::authorize_payment(&state, &good_gw, order_id, amount, "USD")
+        .await
+        .unwrap();
+
+    // Simulate a retry event (gateway recovered).
+    let envelope = make_envelope(
+        EventType::PaymentCaptureRetryRequested,
+        order_id,
+        serde_json::json!({ "retry_count": 3, "reason": "previous timeout" }),
+    );
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    payment::consumers::capture_retry::handle_capture_retry(
+        &mut *conn, &db.pool, &good_gw, &envelope,
+    )
+    .await
+    .unwrap();
+
+    // Payment should now be Captured.
+    let txs = repository::list_transactions_by_order(&db.pool, order_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository::derive_payment_state(&txs),
+        PaymentState::Captured
+    );
+
+    // PaymentCaptured outbox event.
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PaymentCaptured' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, 1);
+}
+
+#[tokio::test]
+async fn capture_retry_handler_requeues_on_continued_failure() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let order_id = Uuid::now_v7();
+    let amount = Decimal::new(5000, 2);
+
+    let good_gw = MockPaymentGateway::always_succeeds();
+    service::authorize_payment(&state, &good_gw, order_id, amount, "USD")
+        .await
+        .unwrap();
+
+    // Retry with retryable failure (gateway still down).
+    let bad_gw = MockPaymentGateway::always_fails_retryable();
+    let envelope = make_envelope(
+        EventType::PaymentCaptureRetryRequested,
+        order_id,
+        serde_json::json!({ "retry_count": 3, "reason": "timeout" }),
+    );
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    payment::consumers::capture_retry::handle_capture_retry(
+        &mut *conn, &db.pool, &bad_gw, &envelope,
+    )
+    .await
+    .unwrap();
+
+    // Should write another retry with incremented count.
+    let row: (String,) = sqlx::query_as(
+        "SELECT payload::text FROM outbox_events WHERE event_type = 'PaymentCaptureRetryRequested' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    // The outbox stores the full envelope; check the nested payload has retry_count=4.
+    let envelope_json: serde_json::Value = serde_json::from_str(&row.0).unwrap();
+    let retry_count = envelope_json["payload"]["retry_count"].as_u64().unwrap();
+    assert_eq!(retry_count, 4, "retry_count should be incremented");
+}
+
+#[tokio::test]
+async fn capture_retry_handler_exhausted_writes_payment_failed() {
+    let db = test_db().await;
+    let state = test_app_state(db.pool.clone());
+    let order_id = Uuid::now_v7();
+    let amount = Decimal::new(5000, 2);
+
+    let good_gw = MockPaymentGateway::always_succeeds();
+    service::authorize_payment(&state, &good_gw, order_id, amount, "USD")
+        .await
+        .unwrap();
+
+    // Retry at max count — should not even attempt gateway call.
+    let envelope = make_envelope(
+        EventType::PaymentCaptureRetryRequested,
+        order_id,
+        serde_json::json!({ "retry_count": 10, "reason": "timeout" }),
+    );
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    payment::consumers::capture_retry::handle_capture_retry(
+        &mut *conn, &db.pool, &good_gw, // gateway would succeed, but we should NOT call it
+        &envelope,
+    )
+    .await
+    .unwrap();
+
+    // Should write PaymentFailed, NOT PaymentCaptured.
+    let failed: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PaymentFailed' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(failed.0, 1, "should write PaymentFailed at max retries");
+
+    let captured: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PaymentCaptured' AND aggregate_id = $1",
+    )
+    .bind(order_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(captured.0, 0, "should NOT capture at max retries");
 }

@@ -8,6 +8,7 @@ members = [
     "cart",
     "order",
     "payment",
+    "saga-tests",
     "shipping",
     "notification",
     "review",

@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::gateway::traits::PaymentGateway;
+use crate::gateway::traits::{GatewayError, PaymentGateway};
 use crate::ledger::repository as ledger_repo;
 use crate::ledger::value_objects::{
     AccountType, EntryDirection, TransactionStatus, TransactionType,
@@ -8,7 +8,7 @@ use crate::payments::error::PaymentError;
 use crate::payments::rules::{AuthorizationContext, authorization_rules, eval_authorization};
 use rust_decimal::Decimal;
 use shared::db::PgPool;
-use shared::db::transaction_support::{TxError, with_transaction};
+use shared::db::transaction_support::with_transaction;
 use shared::errors::AppError;
 use shared::events::{AggregateType, EventEnvelope, EventMetadata, EventType, SourceService};
 use shared::outbox::{OutboxInsert, insert_outbox_event};
@@ -65,10 +65,10 @@ pub async fn authorize_payment(
             .await
             .map_err(|e| AppError::InternalServerError(format!("Failed to authorize: {e}")))?;
         }
-        Err(e) => {
-            tracing::warn!(order_id = %order_id, error = %e, "Gateway declined authorization");
+        Err(gw_err) => {
+            tracing::warn!(order_id = %order_id, error = %gw_err, "Gateway error during authorization");
             write_payment_event(state, order_id, EventType::PaymentFailed, || {
-                serde_json::json!({ "order_id": order_id.to_string(), "reason": "Payment gateway declined" })
+                serde_json::json!({ "order_id": order_id.to_string(), "reason": gw_err.message })
             })
             .await?;
         }
@@ -86,7 +86,10 @@ pub async fn capture_payment(
     let (_, gateway_ref, auth_currency, amount) =
         find_posted_authorization(&state.pool, order_id, "capture").await?;
 
-    gateway.capture(&gateway_ref).await?;
+    gateway
+        .capture(&gateway_ref)
+        .await
+        .map_err(PaymentError::from)?;
 
     let idempotency_key = format!("capture:{order_id}");
     with_transaction(&state.pool, |tx| {
@@ -116,7 +119,10 @@ pub async fn void_payment(
     let (auth_tx_id, gateway_ref, auth_currency, amount) =
         find_posted_authorization(&state.pool, order_id, "void").await?;
 
-    gateway.void(&gateway_ref).await?;
+    gateway
+        .void(&gateway_ref)
+        .await
+        .map_err(PaymentError::from)?;
 
     let idempotency_key = format!("void:{order_id}");
     with_transaction(&state.pool, |tx| {
@@ -189,10 +195,10 @@ pub async fn authorize_payment_on_tx(
             }
             record_authorization(tx, order_id, amount, currency, &result.gateway_reference).await?;
         }
-        Err(e) => {
-            tracing::warn!(order_id = %order_id, error = %e, "Gateway declined authorization");
+        Err(gw_err) => {
+            tracing::warn!(order_id = %order_id, error = %gw_err, "Gateway error during authorization");
             write_outbox(tx, order_id, EventType::PaymentFailed, || {
-                serde_json::json!({ "order_id": order_id.to_string(), "reason": "Payment gateway declined" })
+                serde_json::json!({ "order_id": order_id.to_string(), "reason": gw_err.message })
             })
             .await?;
         }
@@ -202,6 +208,12 @@ pub async fn authorize_payment_on_tx(
 }
 
 /// Capture payment: reads on pool, gateway call, writes on tx.
+///
+/// On retryable gateway failure: writes `PaymentCaptureRetryRequested` to outbox
+/// and returns Ok (consumer commits tx, marking the original event as processed).
+/// On non-retryable failure: writes `PaymentFailed` and returns Ok.
+/// This is more resilient than consumer-level retry — the outbox persists retries
+/// across restarts and survives prolonged gateway outages.
 pub async fn capture_payment_on_tx(
     pool: &PgPool,
     tx: &mut PgConnection,
@@ -213,19 +225,46 @@ pub async fn capture_payment_on_tx(
         find_posted_authorization(pool, order_id, "capture").await?;
 
     // Gateway call (no DB held)
-    gateway.capture(&gateway_ref).await?;
-
-    // Write phase (tx)
-    let idempotency_key = format!("capture:{order_id}");
-    record_capture(
-        tx,
-        order_id,
-        &auth_currency,
-        amount,
-        &idempotency_key,
-        &gateway_ref,
-    )
-    .await
+    match gateway.capture(&gateway_ref).await {
+        Ok(_) => {
+            let idempotency_key = format!("capture:{order_id}");
+            record_capture(
+                tx,
+                order_id,
+                &auth_currency,
+                amount,
+                &idempotency_key,
+                &gateway_ref,
+            )
+            .await
+        }
+        Err(gw_err) if gw_err.is_retryable => {
+            tracing::warn!(order_id = %order_id, error = %gw_err, "Retryable capture failure, scheduling retry via outbox");
+            write_outbox(
+                tx,
+                order_id,
+                EventType::PaymentCaptureRetryRequested,
+                || {
+                    serde_json::json!({
+                        "order_id": order_id.to_string(),
+                        "retry_count": 1,
+                        "reason": gw_err.message,
+                    })
+                },
+            )
+            .await
+        }
+        Err(gw_err) => {
+            tracing::error!(order_id = %order_id, error = %gw_err, "Non-retryable capture failure");
+            write_outbox(tx, order_id, EventType::PaymentFailed, || {
+                serde_json::json!({
+                    "order_id": order_id.to_string(),
+                    "reason": format!("Capture declined: {}", gw_err.message),
+                })
+            })
+            .await
+        }
+    }
 }
 
 /// Void payment: reads on pool, gateway call, writes on tx.
@@ -240,7 +279,10 @@ pub async fn void_payment_on_tx(
         find_posted_authorization(pool, order_id, "void").await?;
 
     // Gateway call (no DB held)
-    gateway.void(&gateway_ref).await?;
+    gateway
+        .void(&gateway_ref)
+        .await
+        .map_err(PaymentError::from)?;
 
     // Write phase (tx)
     let idempotency_key = format!("void:{order_id}");
@@ -313,7 +355,7 @@ async fn record_authorization(
     .await
 }
 
-async fn record_capture(
+pub(crate) async fn record_capture(
     tx: &mut PgConnection,
     order_id: Uuid,
     auth_currency: &str,
@@ -390,7 +432,7 @@ async fn record_void(
     .await
 }
 
-async fn find_posted_authorization(
+pub(crate) async fn find_posted_authorization(
     executor: &PgPool,
     order_id: Uuid,
     operation: &str,
@@ -481,7 +523,7 @@ async fn post_transaction(tx: &mut PgConnection, transaction_id: Uuid) -> Result
         .await
 }
 
-async fn write_outbox(
+pub(crate) async fn write_outbox(
     tx: &mut PgConnection,
     order_id: Uuid,
     event_type: EventType,

@@ -11,7 +11,8 @@
 | identity     | Complete (84 tests)  | Auth, Users, Profiles                            | Users, Credentials, Roles                         | [identity/CLAUDE.md](identity/CLAUDE.md) |
 | catalog      | Complete (160 tests) | Products, Pricing, Inventory, Categories, Brands | Products, SKUs, Images, Stock, Categories, Brands | [catalog/CLAUDE.md](catalog/CLAUDE.md)   |
 | order        | Complete (88 tests)  | Order lifecycle (state machine)                  | Orders, Order Items                               | [order/CLAUDE.md](order/CLAUDE.md)       |
-| payment      | Complete (79 tests)  | Payment gateway, double-entry ledger             | Accounts, Transactions, Entries                   | [payment/CLAUDE.md](payment/CLAUDE.md)   |
+| payment      | Complete (88 tests)  | Payment gateway, double-entry ledger             | Accounts, Transactions, Entries                   | [payment/CLAUDE.md](payment/CLAUDE.md)   |
+| saga-tests   | Complete (6 tests)   | Cross-service saga integration tests             | —                                                 | —                                        |
 | cart         | Complete (59 tests)  | Shopping cart (Redis)                             | Cart Items (Redis hash)                           | [cart/CLAUDE.md](cart/CLAUDE.md)         |
 | shipping     | Stub                 | Logistics, tracking                              | Shipments, Carriers                               | —                                        |
 | notification | Stub                 | Emails, SMS, Push                                | Templates, Delivery Logs                          | —                                        |
@@ -23,6 +24,7 @@
 
 - Update the relevant CLAUDE.md after changes; create ADRs via `make adr` for architectural decisions
 - Git tags mark milestones (e.g. `v0.1-identity-auth`); progress summaries live in `.plan/progress-summary-*.md`
+- Reference docs: [docs/ordering-saga-flows.md](docs/ordering-saga-flows.md) (saga event flows), [docs/adr/](docs/adr/) (ADRs)
 
 ## ADR Summary
 
@@ -65,6 +67,8 @@ use shared::responses::{ok, success, created};
 use shared::rules::{Rule, RuleResult};           // composable rule algebra (ADR-012)
 use shared::new_types::money::{Price, Currency, Money}; // shared money VOs
 use shared::test_utils::db::TestDb;             // behind `test-utils` feature
+use shared::test_utils::events::make_envelope;  // test envelope builder (auto source/aggregate)
+use shared::distributed_lock::DistributedLock;  // Redis SETNX + Lua atomic release
 ```
 
 ## Patterns to Implement

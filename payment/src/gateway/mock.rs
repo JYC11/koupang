@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use rust_decimal::Decimal;
-use shared::errors::AppError;
 use uuid::Uuid;
 
 use super::traits::{
-    GatewayAuthResult, GatewayCaptureResult, GatewayRefundResult, GatewayStatus, GatewayVoidResult,
-    PaymentGateway,
+    GatewayAuthResult, GatewayCaptureResult, GatewayError, GatewayRefundResult, GatewayStatus,
+    GatewayVoidResult, PaymentGateway,
 };
 
 pub struct MockPaymentGateway {
     always_succeed: bool,
+    retryable_failure: bool,
     tampered_amount: Option<Decimal>,
 }
 
@@ -17,13 +17,25 @@ impl MockPaymentGateway {
     pub fn always_succeeds() -> Self {
         Self {
             always_succeed: true,
+            retryable_failure: false,
             tampered_amount: None,
         }
     }
 
+    /// Simulates a non-retryable decline (card declined, insufficient funds).
     pub fn always_fails() -> Self {
         Self {
             always_succeed: false,
+            retryable_failure: false,
+            tampered_amount: None,
+        }
+    }
+
+    /// Simulates a retryable infrastructure failure (timeout, 503).
+    pub fn always_fails_retryable() -> Self {
+        Self {
+            always_succeed: false,
+            retryable_failure: true,
             tampered_amount: None,
         }
     }
@@ -32,7 +44,16 @@ impl MockPaymentGateway {
     pub fn tampered_amount(amount: Decimal) -> Self {
         Self {
             always_succeed: true,
+            retryable_failure: false,
             tampered_amount: Some(amount),
+        }
+    }
+
+    fn make_error(&self, operation: &str) -> GatewayError {
+        if self.retryable_failure {
+            GatewayError::timeout(format!("{operation} timed out"))
+        } else {
+            GatewayError::declined(format!("{operation} declined"))
         }
     }
 }
@@ -45,14 +66,11 @@ impl PaymentGateway for MockPaymentGateway {
         _order_id: Uuid,
         amount: Decimal,
         _currency: &str,
-    ) -> Result<GatewayAuthResult, AppError> {
-        // Simulate 10ms latency
+    ) -> Result<GatewayAuthResult, GatewayError> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         if !self.always_succeed {
-            return Err(AppError::InternalServerError(
-                "Payment gateway declined".to_string(),
-            ));
+            return Err(self.make_error("Authorization"));
         }
 
         let approved_amount = self.tampered_amount.unwrap_or(amount);
@@ -64,11 +82,14 @@ impl PaymentGateway for MockPaymentGateway {
         })
     }
 
-    async fn capture(&self, _gateway_reference: &str) -> Result<GatewayCaptureResult, AppError> {
+    async fn capture(
+        &self,
+        _gateway_reference: &str,
+    ) -> Result<GatewayCaptureResult, GatewayError> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         if !self.always_succeed {
-            return Err(AppError::InternalServerError("Capture failed".to_string()));
+            return Err(self.make_error("Capture"));
         }
 
         Ok(GatewayCaptureResult {
@@ -76,11 +97,11 @@ impl PaymentGateway for MockPaymentGateway {
         })
     }
 
-    async fn void(&self, _gateway_reference: &str) -> Result<GatewayVoidResult, AppError> {
+    async fn void(&self, _gateway_reference: &str) -> Result<GatewayVoidResult, GatewayError> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         if !self.always_succeed {
-            return Err(AppError::InternalServerError("Void failed".to_string()));
+            return Err(self.make_error("Void"));
         }
 
         Ok(GatewayVoidResult {
@@ -92,11 +113,11 @@ impl PaymentGateway for MockPaymentGateway {
         &self,
         _gateway_reference: &str,
         _amount: Decimal,
-    ) -> Result<GatewayRefundResult, AppError> {
+    ) -> Result<GatewayRefundResult, GatewayError> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         if !self.always_succeed {
-            return Err(AppError::InternalServerError("Refund failed".to_string()));
+            return Err(self.make_error("Refund"));
         }
 
         Ok(GatewayRefundResult {
@@ -123,12 +144,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_gateway_always_fails() {
+    async fn mock_gateway_decline_is_not_retryable() {
         let gw = MockPaymentGateway::always_fails();
-        let result = gw
+        let err = gw
             .authorize("key-1", Uuid::now_v7(), Decimal::new(4998, 2), "USD")
-            .await;
-        assert!(result.is_err());
+            .await
+            .unwrap_err();
+        assert!(!err.is_retryable);
+        assert_eq!(err.code, "DECLINED");
+    }
+
+    #[tokio::test]
+    async fn mock_gateway_retryable_failure() {
+        let gw = MockPaymentGateway::always_fails_retryable();
+        let err = gw
+            .authorize("key-1", Uuid::now_v7(), Decimal::new(4998, 2), "USD")
+            .await
+            .unwrap_err();
+        assert!(err.is_retryable);
+        assert_eq!(err.code, "TIMEOUT");
     }
 
     #[tokio::test]

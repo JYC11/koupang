@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-ADR_DIR=".plan/adr"
+ADR_DIR="docs/adr"
 
 # Find the next ADR number
 last_num=$(ls "$ADR_DIR"/*.md 2>/dev/null | grep -oP '\d{3}' | sort -n | tail -1)

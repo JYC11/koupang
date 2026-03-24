@@ -43,6 +43,7 @@ pub enum EventType {
     PaymentCaptured,
     PaymentVoided,
     PaymentTimedOut,
+    PaymentCaptureRetryRequested,
 }
 
 /// Metadata attached to every domain event.

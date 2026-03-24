@@ -8,6 +8,7 @@ pub mod common;
 pub mod consumers;
 pub mod inventory;
 pub mod products;
+pub mod test_fixtures;
 
 const PRODUCT_CACHE_TTL: u64 = 300; // 5 minutes
 
