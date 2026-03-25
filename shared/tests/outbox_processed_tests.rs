@@ -6,7 +6,9 @@ use uuid::Uuid;
 async fn is_event_processed_returns_false_for_unknown() {
     let db = TestDb::start("./tests/migrations").await;
 
-    let result = is_event_processed(&db.pool, Uuid::now_v7()).await.unwrap();
+    let result = is_event_processed(&db.pool, Uuid::now_v7(), "test")
+        .await
+        .unwrap();
     assert!(!result);
 }
 
@@ -17,15 +19,23 @@ async fn mark_and_check_processed() {
     let event_id = Uuid::now_v7();
 
     // Before marking — should be false
-    assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        !is_event_processed(&db.pool, event_id, "test")
+            .await
+            .unwrap()
+    );
 
     // Mark it
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "order")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "order", "test")
         .await
         .unwrap();
 
     // After marking — should be true
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, "test")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -35,14 +45,18 @@ async fn mark_processed_is_idempotent() {
     let event_id = Uuid::now_v7();
 
     // Mark twice — second call should not error (ON CONFLICT DO NOTHING)
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "order")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "order", "test")
         .await
         .unwrap();
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "order")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "order", "test")
         .await
         .unwrap();
 
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, "test")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -52,7 +66,7 @@ async fn cleanup_deletes_old_events() {
     let event_id = Uuid::now_v7();
 
     // Insert an event
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "order")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "order", "test")
         .await
         .unwrap();
 
@@ -70,5 +84,9 @@ async fn cleanup_deletes_old_events() {
     assert_eq!(deleted, 1);
 
     // Event should no longer exist
-    assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        !is_event_processed(&db.pool, event_id, "test")
+            .await
+            .unwrap()
+    );
 }

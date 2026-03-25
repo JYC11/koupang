@@ -25,3 +25,4 @@ rand = "0.9"
 [dev-dependencies]
 shared = { path = "../shared", features = ["test-utils"] }
 proptest = "1"
+tokio = { version = "1.49.0", features = ["full", "test-util"] }

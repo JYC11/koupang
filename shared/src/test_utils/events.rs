@@ -17,7 +17,9 @@ fn source_and_aggregate(event_type: &EventType) -> (SourceService, AggregateType
         | EventType::PaymentCaptured
         | EventType::PaymentVoided
         | EventType::PaymentTimedOut
-        | EventType::PaymentCaptureRetryRequested => (SourceService::Payment, AggregateType::Payment),
+        | EventType::PaymentCaptureRetryRequested => {
+            (SourceService::Payment, AggregateType::Payment)
+        }
     }
 }
 

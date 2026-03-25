@@ -38,6 +38,7 @@ telemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-ot
 
 [dev-dependencies]
 sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls"] }
+tokio = { version = "1.49.0", features = ["macros", "rt", "test-util"] }
 proptest = "1"
 
 [build-dependencies]

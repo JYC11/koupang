@@ -43,13 +43,14 @@ async fn publish_to_topic(kafka: &TestKafka, topic: &str, envelope: &EventEnvelo
     publisher.publish(topic, envelope).await.unwrap();
 }
 
-/// Start a consumer in the background and return (shutdown_token, join_handle).
+/// Start a consumer in the background and return (shutdown_token, join_handle, group_id).
 fn spawn_consumer(
     kafka: &TestKafka,
     db: &TestDb,
     topic: &str,
     handler: Arc<dyn EventHandler>,
-) -> (CancellationToken, tokio::task::JoinHandle<()>) {
+) -> (CancellationToken, tokio::task::JoinHandle<()>, String) {
+    let group_id = format!("test-consumer-{}", Uuid::now_v7());
     let config = ConsumerConfig {
         // Fast retries for tests
         retry_base_delay: Duration::from_millis(50),
@@ -59,10 +60,7 @@ fn spawn_consumer(
         // Short cleanup interval (but we won't test it here)
         processed_events_cleanup_interval: Duration::from_secs(3600),
         processed_events_max_age: Duration::from_secs(7 * 24 * 3600),
-        ..ConsumerConfig::new(
-            format!("test-consumer-{}", Uuid::now_v7()),
-            vec![topic.to_string()],
-        )
+        ..ConsumerConfig::new(group_id.clone(), vec![topic.to_string()])
     };
 
     let consumer =
@@ -72,7 +70,7 @@ fn spawn_consumer(
     let s = shutdown.clone();
     let handle = tokio::spawn(async move { consumer.run(s).await });
 
-    (shutdown, handle)
+    (shutdown, handle, group_id)
 }
 
 /// Wait for a condition with timeout.
@@ -108,7 +106,7 @@ async fn consumer_processes_event_and_marks_processed() {
         .unwrap();
 
     let handler = Arc::new(MockEventHandler::new());
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     // Publish an event
     let agg_id = Uuid::now_v7();
@@ -129,7 +127,11 @@ async fn consumer_processes_event_and_marks_processed() {
     assert_eq!(handler.received()[0].metadata.event_id, event_id);
 
     // Verify processed_events row exists
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, &group_id)
+            .await
+            .unwrap()
+    );
 
     shutdown.cancel();
     handle.await.unwrap();
@@ -149,16 +151,16 @@ async fn consumer_skips_duplicate_events() {
         .await
         .unwrap();
 
-    // Pre-insert the event as processed
+    let handler = Arc::new(MockEventHandler::new());
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+
+    // Pre-insert the event as processed (must use same consumer_group as the consumer)
     let agg_id = Uuid::now_v7();
     let envelope = order_envelope(agg_id);
     let event_id = envelope.metadata.event_id;
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "test")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "test", &group_id)
         .await
         .unwrap();
-
-    let handler = Arc::new(MockEventHandler::new());
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     // Publish the same event
     publish_to_topic(&kafka, &topic, &envelope).await;
@@ -193,7 +195,7 @@ async fn consumer_retries_transient_errors() {
     handler.push_result(Err(HandlerError::transient("fail 2")));
     // Third call: no queued result → Ok(())
 
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     let agg_id = Uuid::now_v7();
     let envelope = order_envelope(agg_id);
@@ -212,7 +214,11 @@ async fn consumer_retries_transient_errors() {
     assert_eq!(handler.received_count(), 3);
 
     // Event is marked as processed after eventual success
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, &group_id)
+            .await
+            .unwrap()
+    );
 
     shutdown.cancel();
     handle.await.unwrap();
@@ -242,7 +248,7 @@ async fn consumer_sends_to_dlq_after_exhausting_retries() {
         handler.push_result(Err(HandlerError::transient("always fail")));
     }
 
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     let agg_id = Uuid::now_v7();
     let envelope = order_envelope(agg_id);
@@ -266,7 +272,11 @@ async fn consumer_sends_to_dlq_after_exhausting_retries() {
     assert_eq!(dlq_envelope.metadata.event_type, EventType::OrderCreated);
 
     // Event should NOT be marked as processed (handler never succeeded)
-    assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        !is_event_processed(&db.pool, event_id, &group_id)
+            .await
+            .unwrap()
+    );
 
     // Handler was called 4 times (1 initial + 3 retries)
     assert_eq!(handler.received_count(), 4);
@@ -296,7 +306,7 @@ async fn consumer_sends_permanent_error_to_dlq_immediately() {
     let handler = Arc::new(MockEventHandler::new());
     handler.push_result(Err(HandlerError::permanent("bad payload")));
 
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     let agg_id = Uuid::now_v7();
     let envelope = order_envelope(agg_id);
@@ -315,7 +325,11 @@ async fn consumer_sends_permanent_error_to_dlq_immediately() {
     assert_eq!(handler.received_count(), 1);
 
     // NOT marked as processed
-    assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        !is_event_processed(&db.pool, event_id, &group_id)
+            .await
+            .unwrap()
+    );
 
     shutdown.cancel();
     handle.await.unwrap();
@@ -340,7 +354,7 @@ async fn consumer_handles_deserialization_failure() {
         .unwrap();
 
     let handler = Arc::new(MockEventHandler::new());
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, _group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     // Publish garbage to the topic
     let publisher = KafkaEventPublisher::new(&kafka.kafka_config()).unwrap();
@@ -391,7 +405,7 @@ async fn consumer_graceful_shutdown() {
         .unwrap();
 
     let handler = Arc::new(MockEventHandler::new());
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler.clone());
+    let (shutdown, handle, _group_id) = spawn_consumer(&kafka, &db, &topic, handler.clone());
 
     // Let consumer start and then shut it down
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -418,13 +432,14 @@ impl EventHandler for WritingHandler {
         // Write a row to processed_events with a special source_service marker
         // to prove we're in the same transaction as the consumer's mark_event_processed
         sqlx::query(
-            "INSERT INTO processed_events (event_id, event_type, source_service)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (event_id) DO NOTHING",
+            "INSERT INTO processed_events (event_id, event_type, source_service, consumer_group)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (event_id, consumer_group) DO NOTHING",
         )
         .bind(Uuid::now_v7()) // different ID to not conflict with the consumer's mark
         .bind("HandlerTest")
         .bind(envelope.metadata.aggregate_id.to_string())
+        .bind("handler-test")
         .execute(&mut *tx)
         .await
         .map_err(|e| HandlerError::transient(e.to_string()))?;
@@ -446,7 +461,7 @@ async fn consumer_handler_writes_in_same_transaction() {
         .unwrap();
 
     let handler: Arc<dyn EventHandler> = Arc::new(WritingHandler);
-    let (shutdown, handle) = spawn_consumer(&kafka, &db, &topic, handler);
+    let (shutdown, handle, group_id) = spawn_consumer(&kafka, &db, &topic, handler);
 
     let agg_id = Uuid::now_v7();
     let envelope = order_envelope(agg_id);
@@ -455,18 +470,28 @@ async fn consumer_handler_writes_in_same_transaction() {
 
     // Wait for the event to be processed
     let pool = db.pool.clone();
+    let gid = group_id.clone();
     wait_for(
         Duration::from_secs(30),
         Duration::from_millis(100),
         move || {
             let pool = pool.clone();
-            async move { is_event_processed(&pool, event_id).await.unwrap_or(false) }
+            let gid = gid.clone();
+            async move {
+                is_event_processed(&pool, event_id, &gid)
+                    .await
+                    .unwrap_or(false)
+            }
         },
     )
     .await;
 
     // Verify both the consumer's mark AND the handler's write exist
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, &group_id)
+            .await
+            .unwrap()
+    );
 
     // Handler's row should also exist (written in the same committed tx)
     let handler_row: (bool,) =

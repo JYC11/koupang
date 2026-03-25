@@ -98,7 +98,9 @@ pub async fn confirm_reservation(
     .await
     .map_err(|e| AppError::NotFound(format!("Reservation not found: {e}")))?;
 
-    // Deduct from both stock and reserved
+    // Deduct from both stock and reserved. If admin reduced stock below reserved
+    // quantity while order was in flight, the CHECK (stock_quantity >= 0) constraint
+    // fires — catch it and return a meaningful error instead of a generic 500.
     sqlx::query(
         "UPDATE skus SET stock_quantity = stock_quantity - $1, \
          reserved_quantity = reserved_quantity - $1, updated_at = NOW() \
@@ -108,7 +110,22 @@ pub async fn confirm_reservation(
     .bind(sku_id)
     .execute(&mut *tx)
     .await
-    .map_err(|e| AppError::InternalServerError(format!("Failed to confirm stock: {e}")))?;
+    .map_err(|e| {
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.constraint() == Some("chk_skus_stock") {
+                tracing::error!(
+                    order_id = %order_id,
+                    sku_id = %sku_id,
+                    quantity = reservation.quantity,
+                    "Stock reduced below reservation — admin likely edited stock while order was in flight"
+                );
+                return AppError::BadRequest(format!(
+                    "Cannot confirm reservation for SKU {sku_id}: stock was reduced below reserved quantity"
+                ));
+            }
+        }
+        AppError::InternalServerError(format!("Failed to confirm stock: {e}"))
+    })?;
 
     sqlx::query(
         "UPDATE inventory_reservations SET status = 'confirmed', confirmed_at = NOW() \

@@ -266,23 +266,32 @@ async fn consumer_idempotency_via_processed_events() {
     let received = msg.envelope();
 
     // First time: not yet processed
-    assert!(!is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        !is_event_processed(&db.pool, event_id, "test-consumer")
+            .await
+            .unwrap()
+    );
 
     // Process and mark
     mark_event_processed(
         &db.pool,
         received.metadata.event_id,
         "OrderCreated",
+        "order",
         "test-consumer",
     )
     .await
     .unwrap();
 
     // Second time: already processed — consumer would skip
-    assert!(is_event_processed(&db.pool, event_id).await.unwrap());
+    assert!(
+        is_event_processed(&db.pool, event_id, "test-consumer")
+            .await
+            .unwrap()
+    );
 
     // Marking again is idempotent (no error)
-    mark_event_processed(&db.pool, event_id, "OrderCreated", "test-consumer")
+    mark_event_processed(&db.pool, event_id, "OrderCreated", "order", "test-consumer")
         .await
         .unwrap();
 }

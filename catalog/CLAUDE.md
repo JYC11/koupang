@@ -92,7 +92,7 @@ Tests: `tests/{products,categories,brands}/{repository,service,router}_test.rs` 
 Saga-integrated inventory management for the order/payment flow:
 
 - **Schema**: `reserved_quantity` column on `skus`, `inventory_reservations` table (order_id + sku_id UNIQUE), `sku_availability` view (available = stock - reserved)
-- **Flows**: `reserve_inventory()` (atomic check + increment), `release_reservation()` (cancel path), `confirm_reservation()` (deduct from both stock and reserved)
+- **Flows**: `reserve_inventory()` (atomic check + increment), `release_reservation()` (cancel path), `confirm_reservation()` (deduct from both stock and reserved — detects CHECK constraint violation if admin reduced stock below reserved, logs error and returns descriptive BadRequest instead of 500)
 - **Events**: `InventoryReserved` / `InventoryReservationFailed` written to outbox on `catalog.events` topic
 - **Consumer**: `CatalogEventHandler` consumes `orders.events` — `OrderCreated` → reserve, `OrderCancelled` → release
 - **Failure path**: If reservation fails, `InventoryReservationFailed` is written on a separate transaction (main tx rolls back)
@@ -114,14 +114,14 @@ Lists are **not cached** (paginated + filtered = poor hit rate).
 
 ## Tests
 
-55 unit + 105 integration = 160 tests. `make test SERVICE=catalog`
+55 unit + 106 integration = 161 tests. `make test SERVICE=catalog`
 
 Test layers follow `/test-guide` skill:
 - Products repository (16): internal helpers, JOINs, ltree paths, soft deletes, stock adjustment, CHECK constraints
 - Products service (15): business guards, FK validation (6 tests), ownership, hierarchy, status filtering
 - Products router (46): canonical CRUD flows, HTTP status codes, auth, pagination, filters
 - Products cache (6): Redis cache eviction on mutations
-- Inventory repository (16): reserve, release, confirm, availability, insufficient stock, boundaries, multi-order
+- Inventory repository (17): reserve, release, confirm, availability, insufficient stock, boundaries, multi-order, stock-reduced-below-reserved constraint detection
 - Inventory service (6): reserve+outbox, release, confirm
 
 ### Tips

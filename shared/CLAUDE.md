@@ -14,6 +14,7 @@ shared/src/
 ├── responses.rs               # ok(), success(), created()
 ├── rules.rs                   # Rule<A> algebra — composable business rules as data (ADR-012)
 ├── dto_helpers.rs             # fmt_id(), fmt_datetime(), fmt_datetime_opt()
+├── circuit_breaker.rs         # CircuitBreaker, CircuitBreakerConfig, BreakerStatus — generic count-based sliding window
 ├── distributed_lock.rs        # DistributedLock, LockGuard, LockError — Redis SETNX + Lua atomic release
 ├── auth/
 │   ├── jwt.rs                 # jwt:: free functions (generate/validate tokens), CurrentUser, AccessTokenClaims, JwtTokens
@@ -79,6 +80,7 @@ shared/src/
 | `rules` | `Rule<A>` (`Check`, `All`, `Any`, `Not`), `RuleResult<A>` (`Pass`, `Fail`, `AllOf`, `AnyOf`, `Negated`). Interpreters: `evaluate()`, `evaluate_detailed()`, `describe()`, `collect_checks()`, `collect_failures()`, `failure_messages()`. ADR-012. |
 | `new_types::money` | `Price` (non-negative Decimal), `Currency` (3-letter ISO 4217), `Money` (Price+Currency pair, `same_currency()`) |
 | `responses` | `ok(data)`, `success(status, msg)`, `created(msg)` |
+| `circuit_breaker` | `CircuitBreaker::new(config)`, `.check()` → `Result<(), CircuitOpenError>`, `.record_success()`, `.record_retryable_failure()`, `.status()` → `BreakerStatus`; `CircuitBreakerConfig { window_size, failure_threshold, cooldown }`; thread-safe via `Mutex` |
 | `distributed_lock` | `DistributedLock::new(conn)`, `.acquire(key, ttl)`, `.acquire_with_retry(key, ttl, config)` → `Result<LockGuard, LockError>`; `LockGuard::release()` via Lua atomic check-and-delete; `RetryConfig { max_attempts, retry_delay }` |
 | `email` | `EmailService` trait, `MockEmailService` |
 | `events` | `EventEnvelope` (`.payload_uuid(field)` helper), `EventMetadata`, `EventType`, `AggregateType`, `SourceService`, `EventPublisher` trait, `MockEventPublisher`, `KafkaEventPublisher`, `KafkaAdmin`, `TopicSpec`, `KafkaEventConsumer`, `EventHandler` trait, `HandlerError`, `ConsumerConfig`, `MockEventHandler`, `KafkaHealthChecker`, `KafkaHealth`, `KafkaHealthStatus`, `ConsumerMetricsCollector`, `ConsumerMetrics` |

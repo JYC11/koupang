@@ -233,6 +233,34 @@ async fn confirm_nonexistent_reservation_fails() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn confirm_reservation_fails_when_stock_reduced_below_reserved() {
+    let db = test_db().await;
+    let (_, sku_id) = create_test_sku(&db.pool, 20).await;
+    let order_id = Uuid::now_v7();
+
+    let mut conn = db.pool.acquire().await.unwrap();
+    repository::reserve_inventory(&mut *conn, order_id, sku_id, 15)
+        .await
+        .unwrap();
+
+    // Simulate admin reducing stock below reserved quantity
+    sqlx::query("UPDATE skus SET stock_quantity = 5 WHERE id = $1")
+        .bind(sku_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
+    // Confirm should fail with a meaningful error, not a generic 500
+    let result = repository::confirm_reservation(&mut *conn, order_id, sku_id).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("stock was reduced below reserved quantity"),
+        "Expected constraint violation message, got: {err}"
+    );
+}
+
 // ── Release all reservations ──────────────────────────────────
 
 #[tokio::test]
