@@ -67,7 +67,7 @@ shared/src/
 
 | Module | Key exports |
 |--------|-------------|
-| `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).with_outbox_relay(config).run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers; `.with_outbox_relay(None)` spawns outbox relay (auto-adds Kafka dep, uses `RelayConfig::default()` when `None`); `Infra { db, redis, kafka }` with `require_db()`, `require_redis()`, `require_kafka()` accessors; `ConsumerRegistration { group_id, topics, handler }` |
+| `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).with_outbox_relay().run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers; `.with_outbox_relay()` spawns outbox relay (auto-adds Kafka dep, loads `RelayConfig::from_env()` with sensible defaults); `Infra { db, redis, kafka }` with `require_db()`, `require_redis()`, `require_kafka()` accessors; `ConsumerRegistration { group_id, topics, handler }` |
 | `db` | `init_db() → Result`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
 | `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors; `From<AppError> for TxError` enables `?` propagation in closures |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `PaginatedResponse<T>` (Serialize+Deserialize), `HasId` trait |

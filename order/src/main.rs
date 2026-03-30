@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 handler: Arc::new(OrderEventHandler::new()),
             }]
         })
-        .with_outbox_relay(None)
+        .with_outbox_relay()
         .run(|infra| {
             let app_state = AppState::new(infra.require_db().clone());
             app(app_state)

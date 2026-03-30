@@ -4,8 +4,8 @@ use crate::config::db_config::DbConfig;
 use crate::config::kafka_config::KafkaConfig;
 use crate::config::relay_config::RelayConfig;
 use crate::db::{PgPool, init_db};
-use crate::events::consumer::{EventHandler, KafkaEventConsumer};
 use crate::events::KafkaEventPublisher;
+use crate::events::consumer::{EventHandler, KafkaEventConsumer};
 use crate::health::health_routes;
 use crate::observability::init_tracing;
 use crate::outbox::OutboxRelay;
@@ -205,13 +205,13 @@ impl ServiceBuilder {
     }
 
     /// Spawn the outbox relay as a background task alongside the HTTP server.
-    /// Automatically declares Kafka and Postgres dependencies if not already present.
-    /// Uses the provided config, or `RelayConfig::default()` if `None`.
-    pub fn with_outbox_relay(mut self, config: Option<RelayConfig>) -> Self {
+    /// Automatically declares a Kafka dependency if not already present.
+    /// Config is loaded from env vars with sensible defaults via `RelayConfig::from_env()`.
+    pub fn with_outbox_relay(mut self) -> Self {
         if !self.deps.iter().any(|d| matches!(d, InfraDep::Kafka)) {
             self.deps.push(InfraDep::Kafka);
         }
-        self.relay_config = Some(config.unwrap_or_default());
+        self.relay_config = Some(RelayConfig::from_env());
         self
     }
 
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn with_outbox_relay_adds_kafka_dep() {
-        let builder = ServiceBuilder::new("svc").with_outbox_relay(None);
+        let builder = ServiceBuilder::new("svc").with_outbox_relay();
         assert!(builder.relay_config.is_some());
         assert!(builder.deps.iter().any(|d| matches!(d, InfraDep::Kafka)));
     }
@@ -478,7 +478,7 @@ mod tests {
     fn with_outbox_relay_does_not_duplicate_kafka_dep() {
         let builder = ServiceBuilder::new("svc")
             .with_consumers(|_| vec![])
-            .with_outbox_relay(None);
+            .with_outbox_relay();
         let kafka_count = builder
             .deps
             .iter()
