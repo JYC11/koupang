@@ -80,6 +80,13 @@ impl Infra {
             "BUG: service requires Redis but ServiceBuilder was not configured with .with_redis()",
         )
     }
+
+    /// Returns the Kafka config. Panics if Kafka was not initialized.
+    pub fn require_kafka(&self) -> &KafkaConfig {
+        self.kafka.as_ref().expect(
+            "BUG: service requires Kafka but ServiceBuilder was not configured with .with_consumers()",
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,10 +274,7 @@ impl ServiceBuilder {
             return;
         };
         let consumers = factory(infra);
-        let kafka_config = infra
-            .kafka
-            .as_ref()
-            .expect("BUG: consumers registered but Kafka dep not initialized");
+        let kafka_config = infra.require_kafka();
         let pool = infra.require_db().clone();
         for reg in consumers {
             let config = ConsumerConfig::new(&reg.group_id, reg.topics);
