@@ -105,7 +105,9 @@ Accessor methods (lines 70-83):
 | `require_db()` | `pub fn require_db(&self) -> &PgPool` | Unwraps `db` or panics with "BUG: service requires Postgres but ServiceBuilder was not configured with .with_db()" |
 | `require_redis()` | `pub fn require_redis(&self) -> &redis::aio::ConnectionManager` | Unwraps `redis` or panics with "BUG: service requires Redis but ServiceBuilder was not configured with .with_redis()" |
 
-There is no `require_kafka()` method -- `kafka` is accessed directly via `infra.kafka.as_ref()` in `spawn_consumers()` (line 271).
+| `require_kafka()` | `pub fn require_kafka(&self) -> &KafkaConfig` | Unwraps `kafka` or panics with "BUG: service requires Kafka but ServiceBuilder was not configured with .with_consumers()" |
+
+*Note: `require_kafka()` was added in commit `d00a071` to fix an API asymmetry. `spawn_consumers()` now uses `infra.require_kafka()` instead of inline `infra.kafka.as_ref().expect(...)`.*
 
 ---
 
@@ -1119,27 +1121,25 @@ Config structs that do NOT use these helpers (DbConfig, AuthConfig, RedisConfig)
 
 ## Observations
 
-1. **Two transaction management patterns coexist**: The `TxContext`/`with_transaction()` system in `transaction_support.rs` (used by service-level code) and the raw `pool.begin()` pattern used by `KafkaEventConsumer`. The consumer uses raw `sqlx::Transaction` and passes `&mut PgConnection` to handlers. If a future persistent jobs system needs to pass a connection to job handlers (as the PRD envisions), it would follow the consumer's pattern rather than `TxContext`.
+1. **Two transaction management patterns coexist (intentional)**: The `TxContext`/`with_transaction()` system in `transaction_support.rs` is used by service-level code where the caller controls the transaction boundary. The raw `pool.begin()` pattern used by `KafkaEventConsumer` is for infrastructure code where the framework manages the transaction boundary (begin → handler → mark processed → commit). These serve different purposes: `TxContext` for business transactions, raw `sqlx::Transaction` for infrastructure orchestration. A job runner would follow the consumer's pattern — the runner manages the transaction, the handler receives `&mut PgConnection`.
 
 2. **OutboxRelay and KafkaEventConsumer have near-identical lifecycle structures**: Both wrap `self` in `Arc`, spawn concurrent loops via `tokio::spawn`, use `CancellationToken` with `biased` `tokio::select!`, and join all handles. Both have a main processing loop + a cleanup loop. This pattern is a clear template for any new background task system.
 
-3. **No `require_kafka()` accessor on Infra**: While `require_db()` and `require_redis()` exist, Kafka config is accessed directly via `infra.kafka.as_ref()` in `spawn_consumers()`. This asymmetry means a hypothetical `with_job_runner()` builder method would need to decide which infra access pattern to follow.
+3. ~~**No `require_kafka()` accessor on Infra**~~: **FIXED** in commit `d00a071`. Added `Infra::require_kafka()` to match `require_db()` and `require_redis()`. Updated `spawn_consumers()` to use it instead of inline `infra.kafka.as_ref().expect(...)`.
 
-4. **Consumer uses raw sqlx::Transaction, not TxContext**: This is significant for the persistent jobs PRD. The `EventHandler` trait receives `&mut sqlx::PgConnection`, not `&mut TxContext`. The consumer manages the transaction boundary itself (begin, idempotency check, handler call, mark processed, commit). A job runner that wants to give handlers transactional access would follow this same pattern.
+4. **Mock/test types are feature-gated**: `MockEventPublisher` and `MockEventHandler` are behind `#[cfg(feature = "test-utils")]`. The `FailureEscalation` trait is always available (not gated), but `LogFailureEscalation` is the only built-in implementation.
 
-5. **Mock/test types are feature-gated**: `MockEventPublisher` and `MockEventHandler` are behind `#[cfg(feature = "test-utils")]`. The `FailureEscalation` trait is always available (not gated), but `LogFailureEscalation` is the only built-in implementation.
+5. **Configuration asymmetry (intentional)**: `DbConfig` and `AuthConfig` panic on missing env vars because they are mandatory infrastructure with no sensible defaults (DB URL, JWT secrets). `RelayConfig`, `ConsumerConfig`, and `KafkaConfig` use `parse_env_or`/`read_env_or` with graceful defaults because they have sensible localhost/development values. A new `JobRunnerConfig` should follow the `RelayConfig` pattern (env vars with defaults + `Default` impl) since all its settings have reasonable defaults.
 
-6. **Configuration asymmetry**: `RelayConfig` and `ConsumerConfig` use `parse_env_or` for graceful defaults, while `DbConfig` and `AuthConfig` panic on missing env vars. The pattern for a new `JobRunnerConfig` would likely follow `RelayConfig` (env vars with defaults + `Default` impl).
+6. **All outbox DDL is duplicated per service (intentional)**: Each service's migration includes the full `outbox_events` + `processed_events` + trigger DDL. This follows the per-service migration ownership pattern — each service owns its database schema. Zero drift confirmed across all copies. A migration template exists at `.plan/outbox-migration-template.sql`.
 
-7. **All outbox DDL is duplicated per service**: Each service's migration includes the full `outbox_events` + `processed_events` + trigger DDL. There is no shared migration mechanism at runtime.
+7. **`outbox/LIFECYCLE.md` is comprehensive internal documentation**: Located at `shared/src/outbox/LIFECYCLE.md`, it contains ASCII diagrams of the happy path, all unhappy paths (Kafka failure, retries exhausted, relay crash, tx rollback), per-aggregate ordering examples, concurrent relay safety, consumer-side flow, and a state machine summary. This is a strong precedent for documenting a persistent jobs lifecycle in the same style.
 
-8. **`outbox/LIFECYCLE.md` is comprehensive internal documentation**: Located at `shared/src/outbox/LIFECYCLE.md`, it contains ASCII diagrams of the happy path, all unhappy paths (Kafka failure, retries exhausted, relay crash, tx rollback), per-aggregate ordering examples, concurrent relay safety, consumer-side flow, and a state machine summary. This is a strong precedent for documenting a persistent jobs lifecycle in the same style.
-
-8. **The `ServiceBuilder` does not currently spawn the OutboxRelay**: Despite the relay being part of the shared crate, there is no `with_outbox_relay()` or similar builder method. The PRD for persistent jobs mentions `ServiceBuilder::with_job_runner()` integration, which would be a new pattern alongside the existing `with_consumers()`.
+8. ~~**The `ServiceBuilder` does not currently spawn the OutboxRelay**~~: **FIXED** in this session. Added `ServiceBuilder::with_outbox_relay(config)` that spawns the relay as a background task alongside HTTP server and consumers. Automatically declares Kafka dependency. Uses `RelayConfig::default()` when `None` is passed. Wired into both `run()` and `run_with_grpc()`.
 
 ## Could Not Determine
 
-1. **How the OutboxRelay is actually started in production services**: There is no `with_outbox_relay()` method on `ServiceBuilder`, and no service `main.rs` file shows the relay being started. The relay exists as infrastructure but its production wiring is not visible in the current codebase -- it may be deferred or handled outside the checked-in code.
+1. ~~**How the OutboxRelay is actually started in production services**~~: **RESOLVED** — `ServiceBuilder::with_outbox_relay(config)` now exists. No service `main.rs` has been updated to use it yet, but the wiring is available.
 
 2. **Feature-gating of `MockEventPublisher` in non-test contexts**: The `mock.rs` file has `#[cfg(feature = "test-utils")]` at the module level in `events/mod.rs`, but the `MockEventPublisher` itself (in `shared/src/events/mock.rs`) does not have any feature gates on its own structs. If the feature gate were removed from `mod.rs`, it would compile without `test-utils`. This may be intentional for dev-mode usage (the payment service uses `MockPaymentGateway::always_succeeds()` in its main.rs).
 

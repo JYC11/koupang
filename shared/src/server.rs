@@ -2,10 +2,13 @@ use crate::cache::init_optional_redis;
 use crate::config::consumer_config::ConsumerConfig;
 use crate::config::db_config::DbConfig;
 use crate::config::kafka_config::KafkaConfig;
+use crate::config::relay_config::RelayConfig;
 use crate::db::{PgPool, init_db};
 use crate::events::consumer::{EventHandler, KafkaEventConsumer};
+use crate::events::KafkaEventPublisher;
 use crate::health::health_routes;
 use crate::observability::init_tracing;
+use crate::outbox::OutboxRelay;
 use axum::Router;
 use std::error::Error;
 use std::fmt;
@@ -144,6 +147,7 @@ pub struct ServiceBuilder {
     http_port_env: &'static str,
     deps: Vec<InfraDep>,
     consumer_factory: Option<ConsumerFactory>,
+    relay_config: Option<RelayConfig>,
 }
 
 impl ServiceBuilder {
@@ -153,6 +157,7 @@ impl ServiceBuilder {
             http_port_env: "PORT",
             deps: Vec::new(),
             consumer_factory: None,
+            relay_config: None,
         }
     }
 
@@ -199,8 +204,19 @@ impl ServiceBuilder {
         self
     }
 
+    /// Spawn the outbox relay as a background task alongside the HTTP server.
+    /// Automatically declares Kafka and Postgres dependencies if not already present.
+    /// Uses the provided config, or `RelayConfig::default()` if `None`.
+    pub fn with_outbox_relay(mut self, config: Option<RelayConfig>) -> Self {
+        if !self.deps.iter().any(|d| matches!(d, InfraDep::Kafka)) {
+            self.deps.push(InfraDep::Kafka);
+        }
+        self.relay_config = Some(config.unwrap_or_default());
+        self
+    }
+
     /// Run HTTP server only (no gRPC sidecar).
-    /// If consumers were registered, they are spawned as background tasks.
+    /// If consumers or outbox relay were registered, they are spawned as background tasks.
     pub async fn run<F>(self, build_app: F) -> Result<(), Box<dyn Error>>
     where
         F: FnOnce(&Infra) -> Router,
@@ -209,11 +225,13 @@ impl ServiceBuilder {
         let name = self.name;
         let deps = self.deps;
         let consumer_factory = self.consumer_factory;
+        let relay_config = self.relay_config;
         let infra = Self::do_init_infra(name, &deps).await?;
         let app = build_app(&infra).merge(health_routes(name));
 
         let shutdown = CancellationToken::new();
         Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
+        Self::spawn_relay(name, relay_config, &infra, &shutdown)?;
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{name} listening on port {port}");
@@ -238,6 +256,7 @@ impl ServiceBuilder {
         let name = self.name;
         let deps = self.deps;
         let consumer_factory = self.consumer_factory;
+        let relay_config = self.relay_config;
         let grpc_port: u16 = std::env::var(grpc_config.port_env_key)
             .unwrap_or_else(|_| grpc_config.default_port.to_string())
             .parse()
@@ -250,6 +269,7 @@ impl ServiceBuilder {
 
         let shutdown = CancellationToken::new();
         Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
+        Self::spawn_relay(name, relay_config, &infra, &shutdown)?;
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{name} HTTP listening on port {port}");
@@ -291,6 +311,29 @@ impl ServiceBuilder {
                 }
             }
         }
+    }
+
+    /// Spawn the outbox relay as a background task. Shared by run() and run_with_grpc().
+    fn spawn_relay(
+        name: &str,
+        relay_config: Option<RelayConfig>,
+        infra: &Infra,
+        shutdown: &CancellationToken,
+    ) -> Result<(), Box<dyn Error>> {
+        let Some(config) = relay_config else {
+            return Ok(());
+        };
+        let kafka_config = infra.require_kafka();
+        let pool = infra.require_db().clone();
+        let publisher: Arc<dyn crate::events::EventPublisher> =
+            Arc::new(KafkaEventPublisher::new(kafka_config)?);
+        let relay = OutboxRelay::new(pool, publisher, config).with_redis(infra.redis.clone());
+        let token = shutdown.clone();
+        tokio::spawn(async move {
+            relay.run(token).await;
+        });
+        tracing::info!("{name} outbox relay started");
+        Ok(())
     }
 
     /// Interpreter: walk the deps list and initialize each declared resource.
@@ -422,6 +465,37 @@ mod tests {
             kafka: None,
         };
         infra.require_redis();
+    }
+
+    #[test]
+    fn with_outbox_relay_adds_kafka_dep() {
+        let builder = ServiceBuilder::new("svc").with_outbox_relay(None);
+        assert!(builder.relay_config.is_some());
+        assert!(builder.deps.iter().any(|d| matches!(d, InfraDep::Kafka)));
+    }
+
+    #[test]
+    fn with_outbox_relay_does_not_duplicate_kafka_dep() {
+        let builder = ServiceBuilder::new("svc")
+            .with_consumers(|_| vec![])
+            .with_outbox_relay(None);
+        let kafka_count = builder
+            .deps
+            .iter()
+            .filter(|d| matches!(d, InfraDep::Kafka))
+            .count();
+        assert_eq!(kafka_count, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: service requires Kafka")]
+    fn infra_require_kafka_panics_when_none() {
+        let infra = Infra {
+            db: None,
+            redis: None,
+            kafka: None,
+        };
+        infra.require_kafka();
     }
 
     #[test]
