@@ -314,10 +314,68 @@ Runner listens on `'persistent_jobs'` channel. Falls back to poll on listener fa
 - Redis dedup cache (not needed -- unlike outbox, jobs don't publish to external systems)
 - Global concurrency limits across runner instances (per-instance only for MVP; `concurrency_group` column can be added later)
 
-## Research Items (Future Session)
+## Research-Resolved Decisions
 
-1. **Transaction scope in other libraries:** How do Oban, GoodJob, JobRunr, Hangfire handle transaction scope for handler execution? Do they wrap handlers in a framework-managed transaction or let handlers manage their own?
-2. **Missed cron tick handling:** How do other job libraries handle overrun scheduling / missed ticks? (Quartz has misfire instructions, Oban has snooze)
-3. **Completed job retention:** How do other libraries handle completed job history? Delete immediately (Quartz), retain with pruner (Oban), archive table, or object storage?
-4. **Cleanup batching:** Should the cleanup loop batch deletes (like outbox's 1000-at-a-time pattern) to avoid long-running DELETE transactions?
-5. **Recurring vs one-shot DB constraints:** Design DB trigger constraints that enforce valid state transitions differently based on whether `schedule IS NOT NULL`
+Full research details in [`research-jobs.md`](research-jobs.md).
+
+### R1: Transaction Scope — D4 Validated
+
+Cross-library research (Oban, GoodJob, JobRunr, Hangfire, Que, Sidekiq) confirms the industry consensus is separate transactions for claim/execute/mark. Only Que wraps handler+completion in one tx (minority approach, incompatible with our `with_transaction()` pattern). **No changes to D4.**
+
+### R2: Missed Cron Ticks — D7 Validated
+
+Most libraries (Oban, Celery Beat, cron) simply skip missed ticks with no catch-up. Quartz coalesces missed ticks into one. APScheduler is most configurable (grace time + coalesce). Our slot model naturally prevents overlap and coalesces. **No changes to D7.**
+
+### R3: Completed Job Retention — D2 Validated
+
+No library provides a built-in archive table. Time-based expiration is universal (Oban 60s, Hangfire 24h, GoodJob 14d). Failed jobs always retained longer. Our 7-day default with indefinite failure retention matches industry practice. **No changes to D2.**
+
+### R4: Cleanup Batching — Replicate Outbox Pattern
+
+The outbox cleanup uses `LIMIT 1000` batched deletes in a drain loop with shutdown checks between batches (`relay.rs:317-349`). All DB-backed job libraries batch deletes similarly (Oban: 10k per cycle).
+
+**Decision:** Job cleanup loop uses `LIMIT 1000` batched deletes, same SQL subquery pattern and drain loop as outbox.
+
+```sql
+DELETE FROM persistent_jobs
+WHERE id IN (
+    SELECT id FROM persistent_jobs
+    WHERE status = 'completed'
+      AND updated_at < NOW() - make_interval(secs => $1::float8)
+    LIMIT 1000
+)
+```
+
+### R5: Recurring vs One-Shot DB Trigger Constraints
+
+Extends the outbox trigger pattern (`BEFORE UPDATE OF status`) with a `schedule IS NOT NULL` gate on the `completed -> pending` transition.
+
+**Decision:** The `enforce_job_status_transition()` trigger allows `completed -> pending` only when `NEW.schedule IS NOT NULL` (recurring jobs). All other transitions are universal. Self-transitions always allowed. Same `check_violation` ERRCODE as outbox.
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_job_status_transition() RETURNS trigger AS $$
+BEGIN
+    IF OLD.status = NEW.status THEN RETURN NEW; END IF;
+
+    -- Universal transitions
+    IF OLD.status = 'pending'  AND NEW.status = 'running'       THEN RETURN NEW; END IF;
+    IF OLD.status = 'running'  AND NEW.status = 'completed'     THEN RETURN NEW; END IF;
+    IF OLD.status = 'running'  AND NEW.status = 'failed'        THEN RETURN NEW; END IF;
+    IF OLD.status = 'running'  AND NEW.status = 'dead_lettered' THEN RETURN NEW; END IF;
+    IF OLD.status = 'running'  AND NEW.status = 'pending'       THEN RETURN NEW; END IF;
+    IF OLD.status = 'pending'  AND NEW.status = 'cancelled'     THEN RETURN NEW; END IF;
+    IF OLD.status = 'dead_lettered' AND NEW.status = 'pending'  THEN RETURN NEW; END IF;
+    IF OLD.status = 'failed'        AND NEW.status = 'pending'  THEN RETURN NEW; END IF;
+
+    -- Recurring-only: completed -> pending (reset-in-place)
+    IF OLD.status = 'completed' AND NEW.status = 'pending' THEN
+        IF NEW.schedule IS NOT NULL THEN RETURN NEW; END IF;
+        RAISE EXCEPTION 'completed → pending only valid for recurring jobs (schedule IS NOT NULL)'
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RAISE EXCEPTION 'invalid job status transition: % → %', OLD.status, NEW.status
+        USING ERRCODE = 'check_violation';
+END;
+$$ LANGUAGE plpgsql;
+```
