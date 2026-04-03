@@ -1,7 +1,8 @@
-//! Integration tests for the persistent job system — Phase 1: Tracer Bullet.
+//! Integration tests for the persistent job system.
 //!
-//! Covers: migration triggers, enqueue/claim/complete lifecycle, NOTIFY wakeup,
+//! Phase 1: migration triggers, enqueue/claim/complete lifecycle, NOTIFY wakeup,
 //! concurrent claim safety, and handler panic safety.
+//! Phase 2: retry backoff, retry exhaustion, permanent error, timeout, runner retry e2e.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -12,8 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use shared::db::PgPool;
 use shared::jobs::{
-    JobError, JobHandler, JobName, JobRegistry, JobRunner, JobRunnerConfig, claim_batch,
-    enqueue_job, mark_completed,
+    JobConfig, JobError, JobHandler, JobName, JobRegistry, JobRunner, JobRunnerConfig, claim_batch,
+    enqueue_job, mark_completed, mark_dead_lettered, mark_retry_or_failed,
 };
 use shared::test_utils::db::TestDb;
 
@@ -658,4 +659,302 @@ async fn handler_panic_safety() {
         result.is_ok(),
         "runner should shut down cleanly after panic"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase 2: Error handling tests
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Test handlers for Phase 2 ──────────────────────────────────────
+
+struct TransientHandler {
+    fail_count: AtomicU32,
+    invocations: Arc<AtomicU32>,
+}
+
+impl TransientHandler {
+    fn new(fail_count: u32) -> (Self, Arc<AtomicU32>) {
+        let invocations = Arc::new(AtomicU32::new(0));
+        (
+            Self {
+                fail_count: AtomicU32::new(fail_count),
+                invocations: Arc::clone(&invocations),
+            },
+            invocations,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl JobHandler for TransientHandler {
+    fn job_type(&self) -> &str {
+        "test.transient"
+    }
+    async fn execute(&self, _payload: &Value, _pool: &PgPool) -> Result<(), JobError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        let remaining = self.fail_count.load(Ordering::SeqCst);
+        if remaining > 0 {
+            self.fail_count.fetch_sub(1, Ordering::SeqCst);
+            return Err(JobError::Transient("temporary failure".into()));
+        }
+        Ok(())
+    }
+}
+
+struct PermanentHandler;
+
+#[async_trait::async_trait]
+impl JobHandler for PermanentHandler {
+    fn job_type(&self) -> &str {
+        "test.permanent"
+    }
+    async fn execute(&self, _payload: &Value, _pool: &PgPool) -> Result<(), JobError> {
+        Err(JobError::Permanent("bad data, cannot recover".into()))
+    }
+}
+
+struct SlowHandler {
+    delay: Duration,
+    invocations: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl JobHandler for SlowHandler {
+    fn job_type(&self) -> &str {
+        "test.slow"
+    }
+    async fn execute(&self, _payload: &Value, _pool: &PgPool) -> Result<(), JobError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        Ok(())
+    }
+}
+
+// ── Repository-level tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn transient_retry_backoff() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    let job_id = enqueue_job(&db.pool, &jn("test.job"), &json!({}), None)
+        .await
+        .unwrap();
+    // Claim to get attempts=1
+    claim_batch(&db.pool, 1, "runner-1").await.unwrap();
+
+    // First transient failure (attempts=1, max_retries=5)
+    mark_retry_or_failed(&db.pool, job_id, "err1", 5)
+        .await
+        .unwrap();
+
+    let row: (String, i32, Option<String>) =
+        sqlx::query_as("SELECT status, attempts, last_error FROM persistent_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "pending", "should retry (not exhausted)");
+    assert_eq!(row.1, 1, "attempts unchanged by mark_retry_or_failed");
+    assert_eq!(row.2.as_deref(), Some("err1"));
+
+    // Verify next_run_at is in the future (backoff applied)
+    let has_backoff: (bool,) =
+        sqlx::query_as("SELECT next_run_at > NOW() FROM persistent_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(
+        has_backoff.0,
+        "next_run_at should be in the future (backoff)"
+    );
+}
+
+#[tokio::test]
+async fn transient_exhausted_becomes_failed() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    let config = JobConfig {
+        max_retries: Some(2),
+        ..Default::default()
+    };
+    let job_id = enqueue_job(&db.pool, &jn("test.job"), &json!({}), Some(&config))
+        .await
+        .unwrap();
+
+    // Claim (attempts becomes 1)
+    claim_batch(&db.pool, 1, "runner-1").await.unwrap();
+    // Retry back to pending (attempts=1 < max_retries=2)
+    mark_retry_or_failed(&db.pool, job_id, "err1", 2)
+        .await
+        .unwrap();
+
+    // Reset next_run_at so we can claim again immediately (backoff set it to future)
+    sqlx::query("UPDATE persistent_jobs SET next_run_at = NOW() WHERE id = $1")
+        .bind(job_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // Claim again (attempts becomes 2)
+    claim_batch(&db.pool, 1, "runner-1").await.unwrap();
+    // Now attempts=2 >= max_retries=2 → should become failed
+    mark_retry_or_failed(&db.pool, job_id, "err2", 2)
+        .await
+        .unwrap();
+
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status, last_error FROM persistent_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        row.0, "failed",
+        "should be terminal after retries exhausted"
+    );
+    assert_eq!(row.1.as_deref(), Some("err2"));
+}
+
+#[tokio::test]
+async fn permanent_dead_lettered() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    let job_id = enqueue_job(&db.pool, &jn("test.job"), &json!({}), None)
+        .await
+        .unwrap();
+    claim_batch(&db.pool, 1, "runner-1").await.unwrap();
+
+    mark_dead_lettered(&db.pool, job_id, "corrupt payload")
+        .await
+        .unwrap();
+
+    let row: (String, i32, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT status, attempts, last_error, locked_by FROM persistent_jobs WHERE id = $1",
+    )
+    .bind(job_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "dead_lettered");
+    assert_eq!(row.1, 1, "attempts should be 1 (claimed once)");
+    assert_eq!(row.2.as_deref(), Some("corrupt payload"));
+    assert!(row.3.is_none(), "lock should be cleared");
+}
+
+#[tokio::test]
+async fn timeout_leaves_running() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    let count = Arc::new(AtomicU32::new(0));
+    let handler = SlowHandler {
+        delay: Duration::from_secs(10), // much longer than timeout
+        invocations: Arc::clone(&count),
+    };
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+
+    // Very short timeout to trigger quickly
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(7200),
+        default_timeout_seconds: 1, // 1 second timeout
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Enqueue with 1-second timeout override
+    let job_config = JobConfig {
+        timeout_seconds: Some(1),
+        ..Default::default()
+    };
+    let job_id = enqueue_job(&db.pool, &jn("test.slow"), &json!({}), Some(&job_config))
+        .await
+        .unwrap();
+
+    // Wait for timeout to fire
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Job should still be 'running' (timeout leaves it for stale lock recovery)
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status, locked_by FROM persistent_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "running", "timed-out job should stay running");
+    assert!(row.1.is_some(), "lock should still be held");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
+}
+
+// ── Runner-level retry e2e ─────────────────────────────────────────
+
+#[tokio::test]
+async fn runner_retry_end_to_end() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Handler fails transiently once, then succeeds
+    let (handler, invocations) = TransientHandler::new(1);
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(7200),
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Enqueue job
+    let job_id = enqueue_job(&db.pool, &jn("test.transient"), &json!({}), None)
+        .await
+        .unwrap();
+
+    // Wait for first attempt (transient failure) + backoff + second attempt (success)
+    // Backoff for attempts=1 is 2^1 = 2 seconds
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let row: (String,) = sqlx::query_as("SELECT status FROM persistent_jobs WHERE id = $1")
+                .bind(job_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            if row.0 == "completed" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("job should eventually complete after retry");
+
+    assert!(
+        invocations.load(Ordering::SeqCst) >= 2,
+        "handler should be called at least twice (fail + succeed)"
+    );
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
 }

@@ -103,3 +103,69 @@ pub async fn mark_completed(
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     Ok(())
 }
+
+// ── Mark retry or failed ───────────────────────────────────────────
+
+/// Increment attempts and either retry with exponential backoff or transition
+/// to `failed` if retries are exhausted (D9).
+///
+/// Uses a single UPDATE with CASE expressions — same SQL pattern as
+/// `outbox::mark_retry_or_failed()`. Backoff: `2^min(attempts, 10)` seconds.
+pub async fn mark_retry_or_failed(
+    executor: impl sqlx::PgExecutor<'_>,
+    job_id: Uuid,
+    error: &str,
+    max_retries: i32,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE persistent_jobs
+        SET
+            status = CASE
+                WHEN attempts >= $3 THEN 'failed'
+                ELSE 'pending'
+            END,
+            next_run_at = CASE
+                WHEN attempts >= $3 THEN next_run_at
+                ELSE NOW() + make_interval(secs => POW(2, LEAST(attempts, 10))::float8)
+            END,
+            last_error = $2,
+            locked_by = NULL,
+            locked_at = NULL
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(error)
+    .bind(max_retries)
+    .execute(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    Ok(())
+}
+
+// ── Mark dead lettered ─────────────────────────────────────────────
+
+/// Transition a job to `dead_lettered` (permanent error, no retry).
+pub async fn mark_dead_lettered(
+    executor: impl sqlx::PgExecutor<'_>,
+    job_id: Uuid,
+    error: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE persistent_jobs
+        SET status = 'dead_lettered',
+            last_error = $2,
+            locked_by = NULL,
+            locked_at = NULL
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(error)
+    .execute(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    Ok(())
+}

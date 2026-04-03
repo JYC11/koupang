@@ -8,7 +8,10 @@ use tokio_util::sync::CancellationToken;
 use crate::config::job_runner_config::JobRunnerConfig;
 use crate::db::PgPool;
 use crate::jobs::registry::JobRegistry;
-use crate::jobs::repository::{claim_batch, mark_completed};
+use crate::jobs::repository::{
+    claim_batch, mark_completed, mark_dead_lettered, mark_retry_or_failed,
+};
+use crate::jobs::types::JobError;
 
 /// Background job runner (D6).
 ///
@@ -185,14 +188,22 @@ impl JobRunner {
             };
 
             let guard = InFlightGuard::new(self);
+            let timeout_secs = job.timeout_seconds as u64;
+            let max_retries = job.max_retries;
 
             tokio::spawn(async move {
                 let _guard = guard;
                 let job_id = job.id;
                 let job_type = job.job_type.clone();
 
-                match handler.execute(&job.payload, &pool).await {
-                    Ok(()) => {
+                let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+                let result =
+                    tokio::time::timeout(timeout_duration, handler.execute(&job.payload, &pool))
+                        .await;
+
+                match result {
+                    // Handler succeeded
+                    Ok(Ok(())) => {
                         if let Err(e) = mark_completed(&pool, job_id).await {
                             tracing::error!(
                                 job_id = %job_id,
@@ -203,13 +214,48 @@ impl JobRunner {
                             tracing::debug!(job_id = %job_id, job_type = %job_type, "Job completed");
                         }
                     }
-                    Err(e) => {
-                        // Phase 1: log only. Phase 2 adds retry/dead-letter handling.
+                    // Transient error — retry with backoff or fail if exhausted
+                    Ok(Err(JobError::Transient(msg))) => {
+                        tracing::warn!(
+                            job_id = %job_id,
+                            job_type = %job_type,
+                            attempts = job.attempts,
+                            max_retries,
+                            error = %msg,
+                            "Job failed with transient error"
+                        );
+                        if let Err(e) = mark_retry_or_failed(&pool, job_id, &msg, max_retries).await
+                        {
+                            tracing::error!(
+                                job_id = %job_id,
+                                error = %e,
+                                "Failed to mark job retry/failed"
+                            );
+                        }
+                    }
+                    // Permanent error — dead-letter immediately
+                    Ok(Err(JobError::Permanent(msg))) => {
                         tracing::error!(
                             job_id = %job_id,
                             job_type = %job_type,
-                            error = %e,
-                            "Job handler failed (retry handling deferred to Phase 2)"
+                            error = %msg,
+                            "Job failed with permanent error, dead-lettering"
+                        );
+                        if let Err(e) = mark_dead_lettered(&pool, job_id, &msg).await {
+                            tracing::error!(
+                                job_id = %job_id,
+                                error = %e,
+                                "Failed to mark job dead-lettered"
+                            );
+                        }
+                    }
+                    // Timeout — leave as running, stale lock recovery handles it (Phase 3)
+                    Err(_elapsed) => {
+                        tracing::warn!(
+                            job_id = %job_id,
+                            job_type = %job_type,
+                            timeout_secs,
+                            "Job timed out, leaving as running for stale lock recovery"
                         );
                     }
                 }
