@@ -116,246 +116,53 @@ shared/src/
 
 ## Transactional Outbox (events + outbox modules)
 
-Services publish domain events by writing to a local `outbox_events` table inside the same
-database transaction as the business operation. A background relay reads and publishes to Kafka.
+Services publish domain events via a local `outbox_events` table (same transaction as business operation). A background relay publishes to Kafka.
 
-### Producer side (writing events)
+Full lifecycle: [docs/OUTBOX_LIFECYCLE.md](../docs/OUTBOX_LIFECYCLE.md) | Migration template: `.plan/outbox-migration-template.sql`
 
 ```rust
-use shared::events::{EventEnvelope, EventMetadata, EventType, AggregateType, SourceService};
-use shared::outbox::{OutboxInsert, insert_outbox_event, capture_trace_context};
-
-// Inside a transaction:
-let metadata = EventMetadata::new(EventType::OrderCreated, AggregateType::Order, order_id, SourceService::Order);
-let envelope = EventEnvelope::new(metadata, serde_json::to_value(&payload)?);
+// Producer (inside a transaction):
 let insert = OutboxInsert::from_envelope("order.events", &envelope)
     .with_metadata(capture_trace_context());
 insert_outbox_event(&mut *tx, &insert).await?;
-```
 
-### Consumer side (idempotent processing)
-
-```rust
-use shared::outbox::{is_event_processed, mark_event_processed};
-
-if is_event_processed(&pool, event_id).await? {
-    return Ok(()); // already handled
-}
+// Consumer (idempotent processing):
+if is_event_processed(&pool, event_id).await? { return Ok(()); }
 // ... handle event ...
 mark_event_processed(&pool, event_id, "OrderCreated", "catalog").await?;
 ```
 
-### Relay (OutboxRelay — background task)
+## Kafka Infrastructure
 
-```rust
-use shared::outbox::{OutboxRelay, RelayConfig};
-use shared::events::KafkaEventPublisher;
-use tokio_util::sync::CancellationToken;
-
-let publisher = Arc::new(KafkaEventPublisher::new(&kafka_config)?);
-let config = RelayConfig::default(); // or customize batch_size, poll_interval, etc.
-let relay = OutboxRelay::new(pool, publisher, config);
-
-let heartbeat = relay.heartbeat(); // Arc<RelayHeartbeat> — pass to health endpoint
-let shutdown = CancellationToken::new();
-relay.run(shutdown.clone()).await; // runs until shutdown.cancel()
-
-// From health endpoint:
-// heartbeat.is_alive(Duration::from_secs(120))
-// heartbeat.seconds_since_last_beat() → Option<i64>
-```
-
-Runs 3 concurrent loops: relay (claim→publish→ack), stale lock recovery, cleanup.
-Wakes via PgListener NOTIFY on insert; falls back to `poll_interval` polling.
-
-Full lifecycle reference: [docs/OUTBOX_LIFECYCLE.md](../docs/OUTBOX_LIFECYCLE.md)
-
-### Relay lifecycle (claim → publish → ack)
-
-```
-claim_batch(pool, batch_size, instance_id)   → Vec<OutboxEvent>  (FOR UPDATE SKIP LOCKED)
-  ├─ success → mark_published(pool, id)      → status='published', lock cleared
-  ├─ success → delete_published(pool, id)    → row deleted (delete_on_publish mode)
-  └─ failure → mark_retry_or_failed(pool, id, err) → exponential backoff (2^min(n,10) secs)
-```
-
-### Key design guarantees
-
-- **Per-aggregate ordering**: `claim_batch` uses `DISTINCT ON (aggregate_id)` — only the oldest pending event per aggregate is claimed
-- **No duplicate delivery**: `FOR UPDATE SKIP LOCKED` prevents two relays from claiming the same event
-- **Exponential backoff**: retry delays are 2s, 4s, 8s, ..., capped at 1024s
-- **Stale lock recovery**: `release_stale_locks()` frees events locked by crashed relays
-- **LISTEN/NOTIFY**: `pg_notify('outbox_events', id)` trigger wakes the relay on insert
-- **DB-enforced state machine**: `outbox_enforce_status_transition` trigger rejects invalid transitions (e.g. `published → pending`, `failed → *`)
-
-### Migration template
-
-Copy `.plan/outbox-migration-template.sql` into your service's migration directory.
-Creates both `outbox_events` (producer) and `processed_events` (consumer) tables.
-
-## Kafka Infrastructure (events module)
-
-### Topic management
-
-```rust
-use shared::events::{KafkaAdmin, TopicSpec};
-use shared::config::kafka_config::KafkaConfig;
-
-let config = KafkaConfig::new(); // reads KAFKA_BROKERS env, default "localhost:29092"
-let admin = KafkaAdmin::new(&config)?;
-admin.ensure_topics(&[
-    TopicSpec::new("order.events", 3, 1),
-    TopicSpec::new("payment.events", 3, 1)
-        .with_config("retention.ms", "604800000"),
-]).await?; // idempotent — existing topics silently skipped
-```
-
-### Publishing events directly (used by the relay)
-
-```rust
-use shared::events::{KafkaEventPublisher, EventPublisher};
-
-let publisher = KafkaEventPublisher::new(&config)?;
-publisher.publish("order.events", &envelope).await?;
-// Payload: JSON-serialized EventEnvelope
-// Key: aggregate_id (partition affinity)
-// Headers: event_id, event_type, aggregate_type, aggregate_id, source_service,
-//          correlation_id (if set), causation_id (if set)
-```
-
-### Testing with Kafka
-
-```rust
-use shared::test_utils::kafka::{TestKafka, TestConsumer};
-
-let kafka = TestKafka::start().await;       // shared KRaft container via OnceCell
-let config = kafka.kafka_config();          // KafkaConfig pointing at testcontainer
-let topic = format!("test-{}", Uuid::now_v7()); // unique topic per test
-
-// ... publish ...
-
-let consumer = TestConsumer::new(&kafka.bootstrap_servers, &topic);
-let msg = consumer.recv().await;            // retries on transient BrokerTransportFailure
-let envelope = msg.envelope();              // deserialize payload as EventEnvelope
-assert_eq!(msg.headers["event_type"], "OrderCreated");
-```
-
-## Kafka Event Consumer (events::consumer)
-
-Consumer with transactional idempotency and dead-letter queue (DLQ) support.
-
-### Implementing a consumer
-
-```rust
-use shared::events::{KafkaEventConsumer, EventHandler, HandlerError, ConsumerConfig, EventEnvelope};
-use shared::config::kafka_config::KafkaConfig;
-use tokio_util::sync::CancellationToken;
-
-// 1. Implement EventHandler
-struct MyHandler;
-
-#[async_trait::async_trait]
-impl EventHandler for MyHandler {
-    async fn handle(&self, envelope: &EventEnvelope, tx: &mut sqlx::PgConnection) -> Result<(), HandlerError> {
-        match envelope.metadata.event_type {
-            EventType::OrderCreated => { /* handle in tx */ Ok(()) }
-            _ => Err(HandlerError::permanent("unknown event type"))
-        }
-    }
-}
-
-// 2. Configure, grab metrics handle, and run
-let config = ConsumerConfig::new("order-consumer", vec!["order.events".into()]);
-let consumer = KafkaEventConsumer::new(&kafka_config, config, Arc::new(MyHandler), pool)?;
-let metrics = consumer.metrics(); // Arc<ConsumerMetricsCollector> — pass to health endpoint
-consumer.run(shutdown_token).await;
-// metrics.snapshot() → ConsumerMetrics { events_processed, events_retried, ... }
-```
-
-### Processing guarantees
-
-- **At-least-once delivery** — offset committed after handler success or DLQ publish
-- **Transactional idempotency** — handler runs inside a DB transaction with `processed_events` marker; committed atomically
-- **Inline retry** — transient errors get up to `max_retries` attempts with exponential backoff (1s, 2s, 4s default)
-- **Per-source-topic DLQ** — failed events go to `{topic}.dlq` with headers: `dlq_reason`, `dlq_retry_count`, `dlq_original_topic`, `dlq_timestamp`, `dlq_consumer_group`
-- **Graceful shutdown** — finishes in-flight message, skips remaining retries
+Full guide: [docs/KAFKA_GUIDE.md](../docs/KAFKA_GUIDE.md) (topic management, publishing, testing, consumer implementation)
 
 ## Persistent Jobs (jobs module)
 
-Services run background jobs by writing to a local `persistent_jobs` table. A background
-runner claims, executes, and marks jobs — with retry, timeout, dead-letter, and recurring support.
+Services run background jobs via a local `persistent_jobs` table. Runner claims, executes, and marks jobs with retry, timeout, dead-letter, and recurring support.
 
-### Registering a job handler
+Full lifecycle: [docs/PERSISTENT_JOB_LIFECYCLE.md](../docs/PERSISTENT_JOB_LIFECYCLE.md) | Migration template: `.plan/persistent-jobs-migration-template.sql`
 
 ```rust
-use shared::jobs::{JobHandler, JobError, JobName};
-use serde_json::Value;
-
-struct DisbursementJob { pool: PgPool }
-
-#[async_trait::async_trait]
-impl JobHandler for DisbursementJob {
-    fn job_type(&self) -> &str { "payment.disburse" }  // must be valid JobName format
-    async fn execute(&self, payload: &Value, pool: &PgPool) -> Result<(), JobError> {
-        // Idempotent handler — at-least-once delivery
-        Ok(())
-    }
+// Register handler:
+impl JobHandler for MyJob {
+    fn job_type(&self) -> &str { "payment.disburse" }  // valid JobName: {ns}.{name}
+    async fn execute(&self, payload: &Value, pool: &PgPool) -> Result<(), JobError> { Ok(()) }
 }
-```
 
-### ServiceBuilder integration
-
-```rust
+// ServiceBuilder integration:
 ServiceBuilder::new("payment")
     .with_db("PAYMENT_DB_URL")
     .with_job_runner(|infra| {
         let mut registry = JobRegistry::new();
-        registry.register(Arc::new(DisbursementJob::new(infra.require_db().clone())));
-        // Optional: register recurring jobs
-        registry.register_recurring(RecurringJobDefinition {
-            job_name: JobName::new("payment.reconcile").unwrap(),
-            schedule: JobSchedule::Cron("0 0 * * * *".parse().unwrap()),
-            payload: json!({}),
-            dedup_key: "default".into(),
-            config: None,
-            failure_policy: RecurringFailurePolicy::Die,
-        });
+        registry.register(Arc::new(MyJob::new(infra.require_db().clone())));
         registry
     })
-    .run(|infra| app(app_state))
-    .await
-```
+    .run(|infra| app(app_state)).await
 
-### Enqueuing jobs
-
-```rust
-use shared::jobs::{enqueue_job, JobName, JobConfig};
-
-// Inside a transaction or standalone:
+// Enqueue (inside transaction or standalone):
 let name = JobName::new("payment.disburse").unwrap();
-enqueue_job(&pool, &name, &json!({"order_id": order_id}), None).await?;
-
-// With per-job config overrides:
-let config = JobConfig { max_retries: Some(3), timeout_seconds: Some(60), ..Default::default() };
-enqueue_job(&mut *tx, &name, &payload, Some(&config)).await?;
+enqueue_job(&pool, &name, &json!({"order_id": id}), None).await?;
 ```
-
-Full lifecycle reference: [docs/PERSISTENT_JOB_LIFECYCLE.md](../docs/PERSISTENT_JOB_LIFECYCLE.md)
-
-### Runner lifecycle
-
-The `JobRunner` runs 3 concurrent loops (same pattern as `OutboxRelay`):
-1. **Claim & execute** — `FOR UPDATE SKIP LOCKED` claim, `tokio::time::timeout` wrapping, error dispatch
-2. **Stale lock recovery** — frees jobs from crashed runners
-3. **Cleanup** — deletes old completed jobs in batches of 1000
-
-Error dispatch: `Ok` → completed, `Transient` → retry with `2^min(attempts,10)s` backoff, `Permanent` → dead-lettered, timeout → stays running (stale lock recovery handles).
-
-Recurring jobs use a slot model: one row cycles `pending→running→pending`. Seeded at startup via `ON CONFLICT DO NOTHING`. Failure policies: `Die` (default, slot goes to `failed`) or `ResetToNext` (reset with next tick).
-
-### Migration template
-
-Copy `.plan/persistent-jobs-migration-template.sql` into your service's migration directory.
 
 ## Key Traits to Implement Per Service
 
