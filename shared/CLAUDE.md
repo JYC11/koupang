@@ -31,7 +31,14 @@ shared/src/
 │   ├── redis_config.rs        # RedisConfig::new(), ::try_new()
 │   ├── kafka_config.rs        # KafkaConfig::new(), ::from_brokers(), Default
 │   ├── relay_config.rs        # RelayConfig::from_env(), Default
+│   ├── job_runner_config.rs   # JobRunnerConfig::from_env(), Default
 │   └── consumer_config.rs     # ConsumerConfig::new(group_id, topics), ::from_env()
+├── jobs/
+│   ├── mod.rs                 # re-exports
+│   ├── types.rs               # Job, JobName, JobStatus, JobError, JobConfig, JobSchedule, RecurringJobDefinition, RecurringFailurePolicy, DedupStrategy
+│   ├── registry.rs            # JobHandler trait, JobRegistry (register, register_recurring)
+│   ├── repository.rs          # enqueue_job, claim_batch, mark_completed, mark_retry_or_failed, mark_dead_lettered, seed_recurring_job, reset_recurring, release_stale_locks, cleanup_completed
+│   └── runner.rs              # JobRunner — 3-loop background task (claim/execute, stale lock recovery, cleanup), InFlightGuard, compute_next_run_at, count_missed_ticks
 ├── events/
 │   ├── mod.rs                 # re-exports
 │   ├── types.rs               # EventEnvelope, EventMetadata, EventType, AggregateType, SourceService
@@ -67,7 +74,7 @@ shared/src/
 
 | Module | Key exports |
 |--------|-------------|
-| `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).with_outbox_relay().run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers; `.with_outbox_relay()` spawns outbox relay (auto-adds Kafka dep, loads `RelayConfig::from_env()` with sensible defaults); `Infra { db, redis, kafka }` with `require_db()`, `require_redis()`, `require_kafka()` accessors; `ConsumerRegistration { group_id, topics, handler }` |
+| `server` | `ServiceBuilder::new(name).http_port_env().with_db().with_redis().with_consumers(factory).with_outbox_relay().with_job_runner(factory).run(build_app)` — composable bootstrap via `InfraDep` enum (Postgres, Redis, Kafka); `.with_consumers()` spawns Kafka consumers; `.with_outbox_relay()` spawns outbox relay; `.with_job_runner()` spawns persistent job runner; `Infra { db, redis, kafka }` with `require_db()`, `require_redis()`, `require_kafka()` accessors; `ConsumerRegistration { group_id, topics, handler }` |
 | `db` | `init_db() → Result`, `PgPool`, `PgExec<'e>` (reads), `PgConnection` (writes) |
 | `db::transaction_support` | `with_transaction(pool, closure)`, `with_nested_transaction(tx, closure)`, `TxContext` — logs rollback errors; `From<AppError> for TxError` enables `?` propagation in closures |
 | `db::pagination_support` | `keyset_paginate(params, alias, qb)`, `get_cursors(params, rows)`, `PaginationParams` (impl `Default`: limit=20, forward), `PaginationRes<T>`, `PaginatedResponse<T>` (Serialize+Deserialize), `HasId` trait |
@@ -75,7 +82,8 @@ shared/src/
 | `auth::middleware` | `AuthMiddleware::new(auth_config, user_lookup)` (identity), `::new_claims_based(auth_config)` (other services, ADR-008) |
 | `auth::guards` | `require_access(user, owner_id)`, `require_admin(user)` |
 | `auth::role` | `Role` — Buyer, Seller, Admin |
-| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`), `ConsumerConfig` (`.new(group_id, topics)` / `.from_env()`) |
+| `config` | `DbConfig`, `AuthConfig`, `RedisConfig` (`.new()` / `.try_new()`), `KafkaConfig` (`.new()` / `.from_brokers()`), `RelayConfig` (`.from_env()` / `Default`), `JobRunnerConfig` (`.from_env()` / `Default`), `ConsumerConfig` (`.new(group_id, topics)` / `.from_env()`) |
+| `jobs` | `JobName` (validated `{ns}.{name}`), `JobHandler` trait, `JobRegistry` (`.register()`, `.register_recurring()`), `enqueue_job()`, `claim_batch()`, `mark_completed()`, `mark_retry_or_failed()`, `mark_dead_lettered()`, `seed_recurring_job()`, `reset_recurring()`, `release_stale_locks()`, `cleanup_completed()`, `JobRunner`, `JobSchedule`, `RecurringJobDefinition`, `RecurringFailurePolicy`, `compute_next_run_at()`, `count_missed_ticks()` |
 | `errors` | `AppError` — NotFound, Forbidden, Unauthorized, AlreadyExists, InternalServerError, BadRequest |
 | `rules` | `Rule<A>` (`Check`, `All`, `Any`, `Not`), `RuleResult<A>` (`Pass`, `Fail`, `AllOf`, `AnyOf`, `Negated`). Interpreters: `evaluate()`, `evaluate_detailed()`, `describe()`, `collect_checks()`, `collect_failures()`, `failure_messages()`. ADR-012. |
 | `new_types::money` | `Price` (non-negative Decimal), `Currency` (3-letter ISO 4217), `Money` (Price+Currency pair, `same_currency()`) |
@@ -270,6 +278,81 @@ consumer.run(shutdown_token).await;
 - **Per-source-topic DLQ** — failed events go to `{topic}.dlq` with headers: `dlq_reason`, `dlq_retry_count`, `dlq_original_topic`, `dlq_timestamp`, `dlq_consumer_group`
 - **Graceful shutdown** — finishes in-flight message, skips remaining retries
 
+## Persistent Jobs (jobs module)
+
+Services run background jobs by writing to a local `persistent_jobs` table. A background
+runner claims, executes, and marks jobs — with retry, timeout, dead-letter, and recurring support.
+
+### Registering a job handler
+
+```rust
+use shared::jobs::{JobHandler, JobError, JobName};
+use serde_json::Value;
+
+struct DisbursementJob { pool: PgPool }
+
+#[async_trait::async_trait]
+impl JobHandler for DisbursementJob {
+    fn job_type(&self) -> &str { "payment.disburse" }  // must be valid JobName format
+    async fn execute(&self, payload: &Value, pool: &PgPool) -> Result<(), JobError> {
+        // Idempotent handler — at-least-once delivery
+        Ok(())
+    }
+}
+```
+
+### ServiceBuilder integration
+
+```rust
+ServiceBuilder::new("payment")
+    .with_db("PAYMENT_DB_URL")
+    .with_job_runner(|infra| {
+        let mut registry = JobRegistry::new();
+        registry.register(Arc::new(DisbursementJob::new(infra.require_db().clone())));
+        // Optional: register recurring jobs
+        registry.register_recurring(RecurringJobDefinition {
+            job_name: JobName::new("payment.reconcile").unwrap(),
+            schedule: JobSchedule::Cron("0 0 * * * *".parse().unwrap()),
+            payload: json!({}),
+            dedup_key: "default".into(),
+            config: None,
+            failure_policy: RecurringFailurePolicy::Die,
+        });
+        registry
+    })
+    .run(|infra| app(app_state))
+    .await
+```
+
+### Enqueuing jobs
+
+```rust
+use shared::jobs::{enqueue_job, JobName, JobConfig};
+
+// Inside a transaction or standalone:
+let name = JobName::new("payment.disburse").unwrap();
+enqueue_job(&pool, &name, &json!({"order_id": order_id}), None).await?;
+
+// With per-job config overrides:
+let config = JobConfig { max_retries: Some(3), timeout_seconds: Some(60), ..Default::default() };
+enqueue_job(&mut *tx, &name, &payload, Some(&config)).await?;
+```
+
+### Runner lifecycle
+
+The `JobRunner` runs 3 concurrent loops (same pattern as `OutboxRelay`):
+1. **Claim & execute** — `FOR UPDATE SKIP LOCKED` claim, `tokio::time::timeout` wrapping, error dispatch
+2. **Stale lock recovery** — frees jobs from crashed runners
+3. **Cleanup** — deletes old completed jobs in batches of 1000
+
+Error dispatch: `Ok` → completed, `Transient` → retry with `2^min(attempts,10)s` backoff, `Permanent` → dead-lettered, timeout → stays running (stale lock recovery handles).
+
+Recurring jobs use a slot model: one row cycles `pending→running→pending`. Seeded at startup via `ON CONFLICT DO NOTHING`. Failure policies: `Die` (default, slot goes to `failed`) or `ResetToNext` (reset with next tick).
+
+### Migration template
+
+Copy `.plan/persistent-jobs-migration-template.sql` into your service's migration directory.
+
 ## Key Traits to Implement Per Service
 
 | Trait | Module | When |
@@ -279,4 +362,5 @@ consumer.run(shutdown_token).await;
 | `EmailService` | `email` | If service sends emails (use `MockEmailService` for dev) |
 | `EventPublisher` | `events::publisher` | Publish events to Kafka (use `MockEventPublisher` for tests) |
 | `EventHandler` | `events::consumer` | Consume events from Kafka (use `MockEventHandler` for tests) |
+| `JobHandler` | `jobs::registry` | Background job processing (implement `job_type()` + `execute()`) |
 | `FailureEscalation` | `outbox::types` | Handle permanently failed outbox events (default: `LogFailureEscalation`) |

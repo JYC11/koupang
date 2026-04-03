@@ -1,12 +1,14 @@
 use crate::cache::init_optional_redis;
 use crate::config::consumer_config::ConsumerConfig;
 use crate::config::db_config::DbConfig;
+use crate::config::job_runner_config::JobRunnerConfig;
 use crate::config::kafka_config::KafkaConfig;
 use crate::config::relay_config::RelayConfig;
 use crate::db::{PgPool, init_db};
 use crate::events::KafkaEventPublisher;
 use crate::events::consumer::{EventHandler, KafkaEventConsumer};
 use crate::health::health_routes;
+use crate::jobs::{JobRegistry, JobRunner};
 use crate::observability::init_tracing;
 use crate::outbox::OutboxRelay;
 use axum::Router;
@@ -142,12 +144,16 @@ pub struct ConsumerRegistration {
 /// Factory function that creates consumer registrations after infra is initialized.
 type ConsumerFactory = Box<dyn FnOnce(&Infra) -> Vec<ConsumerRegistration>>;
 
+/// Factory function that creates a job registry after infra is initialized.
+type JobRunnerFactory = Box<dyn FnOnce(&Infra) -> JobRegistry>;
+
 pub struct ServiceBuilder {
     name: &'static str,
     http_port_env: &'static str,
     deps: Vec<InfraDep>,
     consumer_factory: Option<ConsumerFactory>,
     relay_config: Option<RelayConfig>,
+    job_runner_factory: Option<JobRunnerFactory>,
 }
 
 impl ServiceBuilder {
@@ -158,6 +164,7 @@ impl ServiceBuilder {
             deps: Vec::new(),
             consumer_factory: None,
             relay_config: None,
+            job_runner_factory: None,
         }
     }
 
@@ -215,6 +222,17 @@ impl ServiceBuilder {
         self
     }
 
+    /// Register a job runner via a factory that receives initialized infra.
+    /// The factory builds a `JobRegistry` with handlers registered.
+    /// The runner uses the service's existing PgPool — no additional deps needed.
+    pub fn with_job_runner<F>(mut self, factory: F) -> Self
+    where
+        F: FnOnce(&Infra) -> JobRegistry + 'static,
+    {
+        self.job_runner_factory = Some(Box::new(factory));
+        self
+    }
+
     /// Run HTTP server only (no gRPC sidecar).
     /// If consumers or outbox relay were registered, they are spawned as background tasks.
     pub async fn run<F>(self, build_app: F) -> Result<(), Box<dyn Error>>
@@ -226,12 +244,14 @@ impl ServiceBuilder {
         let deps = self.deps;
         let consumer_factory = self.consumer_factory;
         let relay_config = self.relay_config;
+        let job_runner_factory = self.job_runner_factory;
         let infra = Self::do_init_infra(name, &deps).await?;
         let app = build_app(&infra).merge(health_routes(name));
 
         let shutdown = CancellationToken::new();
         Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
         Self::spawn_relay(name, relay_config, &infra, &shutdown)?;
+        Self::spawn_job_runner(name, job_runner_factory, &infra, &shutdown);
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{name} listening on port {port}");
@@ -257,6 +277,7 @@ impl ServiceBuilder {
         let deps = self.deps;
         let consumer_factory = self.consumer_factory;
         let relay_config = self.relay_config;
+        let job_runner_factory = self.job_runner_factory;
         let grpc_port: u16 = std::env::var(grpc_config.port_env_key)
             .unwrap_or_else(|_| grpc_config.default_port.to_string())
             .parse()
@@ -270,6 +291,7 @@ impl ServiceBuilder {
         let shutdown = CancellationToken::new();
         Self::spawn_consumers(name, consumer_factory, &infra, &shutdown);
         Self::spawn_relay(name, relay_config, &infra, &shutdown)?;
+        Self::spawn_job_runner(name, job_runner_factory, &infra, &shutdown);
 
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
         tracing::info!("{name} HTTP listening on port {port}");
@@ -334,6 +356,27 @@ impl ServiceBuilder {
         });
         tracing::info!("{name} outbox relay started");
         Ok(())
+    }
+
+    /// Spawn the job runner as a background task. Shared by run() and run_with_grpc().
+    fn spawn_job_runner(
+        name: &str,
+        factory: Option<JobRunnerFactory>,
+        infra: &Infra,
+        shutdown: &CancellationToken,
+    ) {
+        let Some(factory) = factory else {
+            return;
+        };
+        let registry = factory(infra);
+        let pool = infra.require_db().clone();
+        let config = JobRunnerConfig::from_env();
+        let runner = Arc::new(JobRunner::new(pool, registry, config));
+        let token = shutdown.clone();
+        tokio::spawn(async move {
+            runner.run(token).await;
+        });
+        tracing::info!("{name} job runner started");
     }
 
     /// Interpreter: walk the deps list and initialize each declared resource.
@@ -525,5 +568,13 @@ mod tests {
         unsafe { std::env::set_var(key, "not-a-number") };
         let builder = ServiceBuilder::new("svc").http_port_env(key);
         builder.parse_http_port();
+    }
+
+    #[test]
+    fn with_job_runner_stores_factory() {
+        let builder = ServiceBuilder::new("svc")
+            .with_db("DB_URL")
+            .with_job_runner(|_infra| crate::jobs::JobRegistry::new());
+        assert!(builder.job_runner_factory.is_some());
     }
 }
