@@ -168,6 +168,8 @@ relay.run(shutdown.clone()).await; // runs until shutdown.cancel()
 Runs 3 concurrent loops: relay (claim→publish→ack), stale lock recovery, cleanup.
 Wakes via PgListener NOTIFY on insert; falls back to `poll_interval` polling.
 
+Full lifecycle reference: [docs/OUTBOX_LIFECYCLE.md](../docs/OUTBOX_LIFECYCLE.md)
+
 ### Relay lifecycle (claim → publish → ack)
 
 ```
@@ -337,6 +339,8 @@ enqueue_job(&pool, &name, &json!({"order_id": order_id}), None).await?;
 let config = JobConfig { max_retries: Some(3), timeout_seconds: Some(60), ..Default::default() };
 enqueue_job(&mut *tx, &name, &payload, Some(&config)).await?;
 ```
+
+Full lifecycle reference: [docs/PERSISTENT_JOB_LIFECYCLE.md](../docs/PERSISTENT_JOB_LIFECYCLE.md)
 
 ### Runner lifecycle
 

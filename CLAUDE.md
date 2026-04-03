@@ -24,7 +24,7 @@
 
 - Update the relevant CLAUDE.md after changes; create ADRs via `make adr` for architectural decisions
 - Git tags mark milestones (e.g. `v0.1-identity-auth`); progress summaries live in `.plan/progress-summary-*.md`
-- Reference docs: [docs/ordering-saga-flows.md](docs/ordering-saga-flows.md) (saga event flows), [docs/adr/](docs/adr/) (ADRs)
+- Reference docs: [docs/ordering-saga-flows.md](docs/ordering-saga-flows.md) (saga event flows), [docs/OUTBOX_LIFECYCLE.md](docs/OUTBOX_LIFECYCLE.md) (outbox relay lifecycle), [docs/PERSISTENT_JOB_LIFECYCLE.md](docs/PERSISTENT_JOB_LIFECYCLE.md) (persistent job lifecycle), [docs/adr/](docs/adr/) (ADRs)
 
 ## ADR Summary
 
