@@ -14,7 +14,8 @@ use tokio_util::sync::CancellationToken;
 use shared::db::PgPool;
 use shared::jobs::{
     JobConfig, JobError, JobHandler, JobName, JobRegistry, JobRunner, JobRunnerConfig, claim_batch,
-    enqueue_job, mark_completed, mark_dead_lettered, mark_retry_or_failed,
+    cleanup_completed, enqueue_job, mark_completed, mark_dead_lettered, mark_retry_or_failed,
+    release_stale_locks,
 };
 use shared::test_utils::db::TestDb;
 
@@ -957,4 +958,230 @@ async fn runner_retry_end_to_end() {
 
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase 3: Recovery & cleanup tests
+// ═══════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn stale_lock_recovery() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Manually insert a job with status='running' and locked_at 10 minutes ago
+    sqlx::query(
+        "INSERT INTO persistent_jobs (job_type, payload, status, locked_by, locked_at)
+         VALUES ('test.stale', '{}'::jsonb, 'running', 'dead-runner', NOW() - INTERVAL '10 minutes')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let freed = release_stale_locks(&db.pool, 300).await.unwrap(); // 5 min timeout
+    assert_eq!(freed, 1);
+
+    let row: (
+        String,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT status, locked_by, locked_at FROM persistent_jobs WHERE job_type = 'test.stale'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "pending", "should be reset to pending");
+    assert!(row.1.is_none(), "locked_by should be cleared");
+    assert!(row.2.is_none(), "locked_at should be cleared");
+}
+
+#[tokio::test]
+async fn stale_lock_skips_recent() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Insert a running job locked just 1 second ago
+    sqlx::query(
+        "INSERT INTO persistent_jobs (job_type, payload, status, locked_by, locked_at)
+         VALUES ('test.recent', '{}'::jsonb, 'running', 'live-runner', NOW() - INTERVAL '1 second')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let freed = release_stale_locks(&db.pool, 300).await.unwrap();
+    assert_eq!(freed, 0, "recently locked job should not be freed");
+
+    let row: (String,) =
+        sqlx::query_as("SELECT status FROM persistent_jobs WHERE job_type = 'test.recent'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "running", "should still be running");
+}
+
+#[tokio::test]
+async fn cleanup_batched_deletion() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Insert 2500 completed jobs with old updated_at
+    for i in 0..2500 {
+        sqlx::query(
+            "INSERT INTO persistent_jobs (job_type, payload, status, updated_at)
+             VALUES ($1, '{}'::jsonb, 'completed', NOW() - INTERVAL '30 days')",
+        )
+        .bind(format!("test.cleanup-{i}"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    // Drain loop: call cleanup_completed until 0 rows
+    let mut total = 0u64;
+    let mut batches = 0u32;
+    loop {
+        let deleted = cleanup_completed(&db.pool, 7 * 24 * 3600).await.unwrap();
+        if deleted == 0 {
+            break;
+        }
+        total += deleted;
+        batches += 1;
+    }
+
+    assert_eq!(total, 2500, "all old completed jobs should be deleted");
+    assert_eq!(batches, 3, "should take 3 batches (1000+1000+500)");
+
+    // Verify table is empty
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM persistent_jobs")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
+}
+
+#[tokio::test]
+async fn cleanup_preserves_failed() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Insert failed and dead_lettered jobs with old updated_at
+    sqlx::query(
+        "INSERT INTO persistent_jobs (job_type, payload, status, updated_at)
+         VALUES ('test.failed', '{}'::jsonb, 'failed', NOW() - INTERVAL '30 days')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    // Need to go through valid transition: pending -> running -> dead_lettered
+    let id: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO persistent_jobs (job_type, payload) VALUES ('test.dl', '{}'::jsonb) RETURNING id",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE persistent_jobs SET status = 'running' WHERE id = $1")
+        .bind(id.0)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE persistent_jobs SET status = 'dead_lettered', updated_at = NOW() - INTERVAL '30 days' WHERE id = $1",
+    )
+    .bind(id.0)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let deleted = cleanup_completed(&db.pool, 7 * 24 * 3600).await.unwrap();
+    assert_eq!(
+        deleted, 0,
+        "failed/dead_lettered jobs should NOT be deleted"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_preserves_recent_completed() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    // Insert a recently completed job
+    let id: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO persistent_jobs (job_type, payload) VALUES ('test.recent', '{}'::jsonb) RETURNING id",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE persistent_jobs SET status = 'running' WHERE id = $1")
+        .bind(id.0)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE persistent_jobs SET status = 'completed' WHERE id = $1")
+        .bind(id.0)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    let deleted = cleanup_completed(&db.pool, 7 * 24 * 3600).await.unwrap();
+    assert_eq!(deleted, 0, "recent completed job should NOT be deleted");
+}
+
+#[tokio::test]
+async fn shutdown_drain() {
+    let db = TestDb::start(MIGRATIONS).await;
+
+    let count = Arc::new(AtomicU32::new(0));
+    let handler = SlowHandler {
+        delay: Duration::from_secs(2),
+        invocations: Arc::clone(&count),
+    };
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(10),
+        default_timeout_seconds: 30,
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Enqueue a slow job (takes 2s)
+    enqueue_job(&db.pool, &jn("test.slow"), &json!({}), None)
+        .await
+        .unwrap();
+
+    // Wait for handler to start executing
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if count.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("handler should start within 3s");
+
+    // Cancel shutdown while job is still running (handler sleeps 2s)
+    shutdown.cancel();
+
+    // run() should wait for the in-flight job to complete before returning
+    let result = tokio::time::timeout(Duration::from_secs(10), runner_handle).await;
+    assert!(result.is_ok(), "runner should complete drain within 10s");
+
+    // Verify the job completed (handler finished, mark_completed ran)
+    let row: (String,) =
+        sqlx::query_as("SELECT status FROM persistent_jobs WHERE job_type = 'test.slow'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "completed", "job should complete despite shutdown");
 }

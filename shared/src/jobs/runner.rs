@@ -9,7 +9,8 @@ use crate::config::job_runner_config::JobRunnerConfig;
 use crate::db::PgPool;
 use crate::jobs::registry::JobRegistry;
 use crate::jobs::repository::{
-    claim_batch, mark_completed, mark_dead_lettered, mark_retry_or_failed,
+    claim_batch, cleanup_completed, mark_completed, mark_dead_lettered, mark_retry_or_failed,
+    release_stale_locks,
 };
 use crate::jobs::types::JobError;
 
@@ -65,19 +66,34 @@ impl JobRunner {
         }
     }
 
-    /// Start the runner. Runs until the cancellation token is triggered.
+    /// Start the runner. Runs until the cancellation token is triggered (D6).
     ///
-    /// Phase 1: only the claim_and_execute_loop runs.
-    /// Phase 3 will add stale_lock_recovery_loop and cleanup_loop with tokio::join!.
+    /// Spawns three concurrent loops:
+    /// 1. **claim_and_execute_loop** — main work (claim → execute → mark)
+    /// 2. **stale_lock_recovery_loop** — free crashed/timed-out jobs
+    /// 3. **cleanup_loop** — delete old completed jobs in batches
+    ///
+    /// After all loops exit, waits for in-flight jobs to finish (drain phase).
     pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
-        let runner = Arc::clone(&self);
-        let s = shutdown.clone();
+        let claim_handle = {
+            let r = Arc::clone(&self);
+            let s = shutdown.clone();
+            tokio::spawn(async move { Self::claim_and_execute_loop(r, s).await })
+        };
 
-        let claim_handle = tokio::spawn(async move {
-            Self::claim_and_execute_loop(runner, s).await;
-        });
+        let stale_handle = {
+            let r = Arc::clone(&self);
+            let s = shutdown.clone();
+            tokio::spawn(async move { Self::stale_lock_recovery_loop(r, s).await })
+        };
 
-        let _ = claim_handle.await;
+        let cleanup_handle = {
+            let r = Arc::clone(&self);
+            let s = shutdown.clone();
+            tokio::spawn(async move { Self::cleanup_loop(r, s).await })
+        };
+
+        let _ = tokio::join!(claim_handle, stale_handle, cleanup_handle);
 
         // Drain phase: wait for all in-flight jobs to complete
         self.drain(shutdown).await;
@@ -260,6 +276,65 @@ impl JobRunner {
                     }
                 }
             });
+        }
+    }
+
+    // ── Stale lock recovery loop ─────────────────────────────────
+
+    async fn stale_lock_recovery_loop(runner: Arc<Self>, shutdown: CancellationToken) {
+        let timeout_secs = runner.config.stale_lock_timeout.as_secs() as i64;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    tracing::info!("Stale lock loop: shutdown signal received");
+                    return;
+                }
+                _ = tokio::time::sleep(runner.config.stale_lock_check_interval) => {}
+            }
+
+            match release_stale_locks(&runner.pool, timeout_secs).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(count = n, "Released stale job locks"),
+                Err(e) => tracing::error!(error = %e, "Failed to release stale locks"),
+            }
+        }
+    }
+
+    // ── Cleanup loop ──────────────────────────────────────────────
+
+    async fn cleanup_loop(runner: Arc<Self>, shutdown: CancellationToken) {
+        let max_age_secs = runner.config.cleanup_max_age.as_secs() as i64;
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    tracing::info!("Cleanup loop: shutdown signal received");
+                    return;
+                }
+                _ = tokio::time::sleep(runner.config.cleanup_interval) => {}
+            }
+
+            // Drain in batches of 1000 to avoid long transactions.
+            let mut total = 0u64;
+            loop {
+                if shutdown.is_cancelled() {
+                    break;
+                }
+                match cleanup_completed(&runner.pool, max_age_secs).await {
+                    Ok(0) => break,
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to cleanup completed jobs");
+                        break;
+                    }
+                }
+            }
+            if total > 0 {
+                tracing::info!(count = total, "Cleaned up old completed jobs");
+            }
         }
     }
 

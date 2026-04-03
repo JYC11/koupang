@@ -169,3 +169,62 @@ pub async fn mark_dead_lettered(
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     Ok(())
 }
+
+// ── Release stale locks ────────────────────────────────────────────
+
+/// Free jobs whose lock is older than `stale_timeout_secs`.
+///
+/// Unlike outbox stale lock recovery (which targets `status='pending'` because
+/// the outbox doesn't change status on claim), jobs target `status='running'`
+/// because `claim_batch` transitions `pending→running`.
+///
+/// Returns the number of rows freed.
+pub async fn release_stale_locks(
+    executor: impl sqlx::PgExecutor<'_>,
+    stale_timeout_secs: i64,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE persistent_jobs
+        SET status = 'pending',
+            locked_by = NULL,
+            locked_at = NULL
+        WHERE status = 'running'
+          AND locked_at < NOW() - make_interval(secs => $1::float8)
+        "#,
+    )
+    .bind(stale_timeout_secs)
+    .execute(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    Ok(result.rows_affected())
+}
+
+// ── Cleanup completed ──────────────────────────────────────────────
+
+/// Delete up to 1000 completed jobs older than `max_age_secs` (R4).
+///
+/// Returns the number of rows deleted. Call in a loop until it returns 0
+/// to drain the full backlog in small batches (avoids long transactions
+/// and WAL pressure with large backlogs).
+pub async fn cleanup_completed(
+    executor: impl sqlx::PgExecutor<'_>,
+    max_age_secs: i64,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM persistent_jobs
+        WHERE id IN (
+            SELECT id FROM persistent_jobs
+            WHERE status = 'completed'
+              AND updated_at < NOW() - make_interval(secs => $1::float8)
+            LIMIT 1000
+        )
+        "#,
+    )
+    .bind(max_age_secs)
+    .execute(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    Ok(result.rows_affected())
+}
