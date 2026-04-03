@@ -10,6 +10,7 @@ pub mod errors;
 pub mod events;
 pub mod grpc;
 pub mod health;
+pub mod jobs;
 pub mod new_types;
 pub mod observability;
 pub mod outbox;

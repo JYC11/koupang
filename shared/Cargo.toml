@@ -28,6 +28,7 @@ redis = { version = "1.0.4", features = ["tokio-comp", "connection-manager"] }
 rdkafka = { version = "0.39", features = ["cmake-build"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
+cron = "0.15"
 tonic-prost = "0.14.5"
 testcontainers-modules = { version = "0.15", features = ["redis", "postgres", "kafka"], optional = true }
 http-body-util = { version = "0.1", optional = true }
