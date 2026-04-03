@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::db::PgPool;
-use crate::jobs::types::{JobError, JobName};
+use crate::jobs::types::{JobError, JobName, RecurringJobDefinition};
 
 // ── Job handler trait ──────────────────────────────────────────────
 
@@ -29,12 +29,14 @@ pub trait JobHandler: Send + Sync {
 /// Registry mapping job type strings to handler implementations.
 pub struct JobRegistry {
     handlers: HashMap<String, Arc<dyn JobHandler>>,
+    recurring: Vec<RecurringJobDefinition>,
 }
 
 impl JobRegistry {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            recurring: Vec::new(),
         }
     }
 
@@ -51,9 +53,26 @@ impl JobRegistry {
         self.handlers.insert(key, handler);
     }
 
+    /// Register a recurring job definition. The handler for `def.job_name` must
+    /// already be registered via `register()`. Panics otherwise.
+    pub fn register_recurring(&mut self, def: RecurringJobDefinition) {
+        let key = def.job_name.as_str();
+        assert!(
+            self.handlers.contains_key(key),
+            "handler for '{}' must be registered before register_recurring()",
+            key
+        );
+        self.recurring.push(def);
+    }
+
     /// Look up a handler by job type.
     pub fn get(&self, job_type: &str) -> Option<Arc<dyn JobHandler>> {
         self.handlers.get(job_type).cloned()
+    }
+
+    /// Access recurring job definitions (used by runner at startup).
+    pub fn recurring_definitions(&self) -> &[RecurringJobDefinition] {
+        &self.recurring
     }
 }
 

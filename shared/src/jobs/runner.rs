@@ -10,9 +10,9 @@ use crate::db::PgPool;
 use crate::jobs::registry::JobRegistry;
 use crate::jobs::repository::{
     claim_batch, cleanup_completed, mark_completed, mark_dead_lettered, mark_retry_or_failed,
-    release_stale_locks,
+    release_stale_locks, reset_recurring, seed_recurring_job,
 };
-use crate::jobs::types::JobError;
+use crate::jobs::types::{JobError, JobSchedule, RecurringFailurePolicy};
 
 /// Background job runner (D6).
 ///
@@ -75,6 +75,9 @@ impl JobRunner {
     ///
     /// After all loops exit, waits for in-flight jobs to finish (drain phase).
     pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
+        // Seed recurring job slots at startup (D7)
+        self.seed_recurring_jobs().await;
+
         let claim_handle = {
             let r = Arc::clone(&self);
             let s = shutdown.clone();
@@ -206,6 +209,20 @@ impl JobRunner {
             let guard = InFlightGuard::new(self);
             let timeout_secs = job.timeout_seconds as u64;
             let max_retries = job.max_retries;
+            let is_recurring = job.schedule.is_some();
+            // Look up recurring definition for failure policy (if applicable)
+            let recurring_def = if is_recurring {
+                self.registry
+                    .recurring_definitions()
+                    .iter()
+                    .find(|d| d.job_name.as_str() == job.job_type)
+            } else {
+                None
+            };
+            let failure_policy = recurring_def
+                .map(|d| d.failure_policy.clone())
+                .unwrap_or_default();
+            let schedule = recurring_def.map(|d| d.schedule.clone());
 
             tokio::spawn(async move {
                 let _guard = guard;
@@ -229,6 +246,27 @@ impl JobRunner {
                         } else {
                             tracing::debug!(job_id = %job_id, job_type = %job_type, "Job completed");
                         }
+
+                        // Recurring: reset slot to pending with next run time
+                        if let Some(ref sched) = schedule {
+                            let missed = count_missed_ticks(sched, chrono::Utc::now());
+                            if missed > 0 {
+                                tracing::warn!(
+                                    job_id = %job_id,
+                                    job_type = %job_type,
+                                    missed_ticks = missed,
+                                    "Recurring job overran schedule, skipping missed ticks"
+                                );
+                            }
+                            let next = compute_next_run_at(sched);
+                            if let Err(e) = reset_recurring(&pool, job_id, next).await {
+                                tracing::error!(
+                                    job_id = %job_id,
+                                    error = %e,
+                                    "Failed to reset recurring job"
+                                );
+                            }
+                        }
                     }
                     // Transient error — retry with backoff or fail if exhausted
                     Ok(Err(JobError::Transient(msg))) => {
@@ -248,6 +286,37 @@ impl JobRunner {
                                 "Failed to mark job retry/failed"
                             );
                         }
+
+                        // Recurring + retries exhausted: check failure policy
+                        if is_recurring && job.attempts >= max_retries {
+                            match failure_policy {
+                                RecurringFailurePolicy::Die => {
+                                    tracing::error!(
+                                        job_id = %job_id,
+                                        job_type = %job_type,
+                                        "Recurring job slot dead (Die policy)"
+                                    );
+                                }
+                                RecurringFailurePolicy::ResetToNext => {
+                                    if let Some(ref sched) = schedule {
+                                        let next = compute_next_run_at(sched);
+                                        tracing::warn!(
+                                            job_id = %job_id,
+                                            job_type = %job_type,
+                                            ?next,
+                                            "Recurring job retries exhausted, resetting to next tick (ResetToNext policy)"
+                                        );
+                                        if let Err(e) = reset_recurring(&pool, job_id, next).await {
+                                            tracing::error!(
+                                                job_id = %job_id,
+                                                error = %e,
+                                                "Failed to reset recurring job after exhaustion"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     // Permanent error — dead-letter immediately
                     Ok(Err(JobError::Permanent(msg))) => {
@@ -265,7 +334,7 @@ impl JobRunner {
                             );
                         }
                     }
-                    // Timeout — leave as running, stale lock recovery handles it (Phase 3)
+                    // Timeout — leave as running, stale lock recovery handles it
                     Err(_elapsed) => {
                         tracing::warn!(
                             job_id = %job_id,
@@ -338,6 +407,36 @@ impl JobRunner {
         }
     }
 
+    // ── Recurring job support ────────────────────────────────────
+
+    /// Seed recurring job slots at startup (D7).
+    async fn seed_recurring_jobs(&self) {
+        for def in self.registry.recurring_definitions() {
+            match seed_recurring_job(&self.pool, def).await {
+                Ok(Some(id)) => {
+                    tracing::info!(
+                        job_type = %def.job_name,
+                        job_id = %id,
+                        "Seeded recurring job slot"
+                    );
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        job_type = %def.job_name,
+                        "Recurring job slot already exists"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        job_type = %def.job_name,
+                        error = %e,
+                        "Failed to seed recurring job"
+                    );
+                }
+            }
+        }
+    }
+
     // ── PgListener setup ───────────────────────────────────────────
 
     async fn connect_listener(pool: &PgPool) -> Option<PgListener> {
@@ -366,6 +465,46 @@ impl JobRunner {
     }
 }
 
-// InFlightGuard is tested via integration tests (handler_panic_safety in job_tests.rs)
-// and implicitly by runner_end_to_end. Unit tests for the guard require a PgPool,
-// so they live in the integration test file.
+// ── Recurring schedule helpers ─────────────────────────────────────
+
+/// Compute the next run time from the current moment.
+///
+/// - Cron: iterate schedule from `now`, take the first future tick.
+/// - Interval: `now + duration`.
+pub fn compute_next_run_at(schedule: &JobSchedule) -> chrono::DateTime<chrono::Utc> {
+    let now = chrono::Utc::now();
+    match schedule {
+        JobSchedule::Cron(s) => s
+            .upcoming(chrono::Utc)
+            .next()
+            .expect("cron schedule should always have a next tick"),
+        JobSchedule::Interval(d) => now + chrono::Duration::from_std(*d).unwrap(),
+    }
+}
+
+/// Count how many schedule ticks were missed between `last_run` and now.
+///
+/// Returns 0 if no ticks were missed (i.e., we're on schedule).
+pub fn count_missed_ticks(
+    schedule: &JobSchedule,
+    last_run: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    let now = chrono::Utc::now();
+    match schedule {
+        JobSchedule::Cron(s) => {
+            // Count ticks between last_run and now
+            s.after(&last_run)
+                .take_while(|t| *t <= now)
+                .count()
+                .saturating_sub(1) // the "next" tick isn't missed, it's upcoming
+        }
+        JobSchedule::Interval(d) => {
+            let elapsed = (now - last_run).num_seconds().max(0) as u64;
+            let interval_secs = d.as_secs();
+            if interval_secs == 0 {
+                return 0;
+            }
+            (elapsed / interval_secs).saturating_sub(1) as usize
+        }
+    }
+}

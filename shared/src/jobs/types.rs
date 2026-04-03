@@ -185,6 +185,37 @@ pub struct JobConfig {
     pub dedup_key: Option<String>,
 }
 
+// ── Recurring job types ────────────────────────────────────────────
+
+/// Schedule for recurring jobs (D7, D11).
+#[derive(Debug, Clone)]
+pub enum JobSchedule {
+    /// 6-field cron expression (sec min hour dom month dow).
+    Cron(cron::Schedule),
+    /// Fixed interval between runs.
+    Interval(std::time::Duration),
+}
+
+/// What to do when a recurring job exhausts all retries (D7).
+#[derive(Debug, Clone, Default)]
+pub enum RecurringFailurePolicy {
+    /// Go to `failed` — slot is dead until operator retries (default).
+    #[default]
+    Die,
+    /// Reset to `pending` with next cron/interval tick — continue scheduling.
+    ResetToNext,
+}
+
+/// Definition for a recurring job registered at startup (D7).
+pub struct RecurringJobDefinition {
+    pub job_name: JobName,
+    pub schedule: JobSchedule,
+    pub payload: Value,
+    pub dedup_key: String,
+    pub config: Option<JobConfig>,
+    pub failure_policy: RecurringFailurePolicy,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

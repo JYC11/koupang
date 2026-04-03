@@ -3,6 +3,8 @@
 //! Phase 1: migration triggers, enqueue/claim/complete lifecycle, NOTIFY wakeup,
 //! concurrent claim safety, and handler panic safety.
 //! Phase 2: retry backoff, retry exhaustion, permanent error, timeout, runner retry e2e.
+//! Phase 3: stale lock recovery, cleanup batching, shutdown drain.
+//! Phase 4: recurring jobs — seed, reset, failure policies, schedule helpers.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 
 use shared::db::PgPool;
 use shared::jobs::{
-    JobConfig, JobError, JobHandler, JobName, JobRegistry, JobRunner, JobRunnerConfig, claim_batch,
-    cleanup_completed, enqueue_job, mark_completed, mark_dead_lettered, mark_retry_or_failed,
-    release_stale_locks,
+    JobConfig, JobError, JobHandler, JobName, JobRegistry, JobRunner, JobRunnerConfig, JobSchedule,
+    RecurringFailurePolicy, RecurringJobDefinition, claim_batch, cleanup_completed, enqueue_job,
+    mark_completed, mark_dead_lettered, mark_retry_or_failed, release_stale_locks, reset_recurring,
+    seed_recurring_job,
 };
 use shared::test_utils::db::TestDb;
 
@@ -1184,4 +1187,333 @@ async fn shutdown_drain() {
             .await
             .unwrap();
     assert_eq!(row.0, "completed", "job should complete despite shutdown");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase 4: Recurring job tests
+// ═══════════════════════════════════════════════════════════════════
+
+fn interval_def(job_name: &str, interval: Duration) -> RecurringJobDefinition {
+    RecurringJobDefinition {
+        job_name: jn(job_name),
+        schedule: JobSchedule::Interval(interval),
+        payload: json!({}),
+        dedup_key: "default".into(),
+        config: None,
+        failure_policy: RecurringFailurePolicy::Die,
+    }
+}
+
+// ── Repository-level recurring tests ───────────────────────────────
+
+#[tokio::test]
+async fn seed_recurring_idempotent() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let def = interval_def("test.recurring", Duration::from_secs(60));
+
+    let first = seed_recurring_job(&db.pool, &def).await.unwrap();
+    assert!(first.is_some(), "first seed should create a row");
+
+    let second = seed_recurring_job(&db.pool, &def).await.unwrap();
+    assert!(second.is_none(), "second seed should be a no-op");
+
+    // Verify exactly 1 row
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM persistent_jobs WHERE job_type = 'test.recurring'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(count.0, 1);
+}
+
+#[tokio::test]
+async fn seed_concurrent() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let def1 = interval_def("test.concurrent", Duration::from_secs(60));
+    let def2 = interval_def("test.concurrent", Duration::from_secs(60));
+
+    // Two concurrent seeds — both should succeed (no error), exactly 1 row
+    let (r1, r2) = tokio::join!(
+        seed_recurring_job(&db.pool, &def1),
+        seed_recurring_job(&db.pool, &def2)
+    );
+    assert!(r1.is_ok());
+    assert!(r2.is_ok());
+
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM persistent_jobs WHERE job_type = 'test.concurrent'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(count.0, 1, "exactly one row after concurrent seed");
+}
+
+#[tokio::test]
+async fn cron_next_tick() {
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    // Every hour at :00:00
+    let schedule = JobSchedule::Cron(Schedule::from_str("0 0 * * * *").unwrap());
+    let next = shared::jobs::compute_next_run_at(&schedule);
+
+    let now = chrono::Utc::now();
+    assert!(next > now, "next tick should be in the future");
+    // Should be within the next hour
+    let diff = (next - now).num_seconds();
+    assert!(
+        diff > 0 && diff <= 3600,
+        "next tick should be within 1 hour, got {diff}s"
+    );
+    // Minute and second should be 0
+    assert_eq!(next.format("%M:%S").to_string(), "00:00");
+}
+
+#[tokio::test]
+async fn interval_next_tick() {
+    let schedule = JobSchedule::Interval(Duration::from_secs(60));
+    let next = shared::jobs::compute_next_run_at(&schedule);
+
+    let now = chrono::Utc::now();
+    let diff = (next - now).num_seconds();
+    assert!(
+        diff >= 59 && diff <= 61,
+        "should be ~60s from now, got {diff}s"
+    );
+}
+
+#[tokio::test]
+async fn reset_in_place() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let def = interval_def("test.reset", Duration::from_secs(60));
+
+    let id = seed_recurring_job(&db.pool, &def).await.unwrap().unwrap();
+
+    // Claim
+    claim_batch(&db.pool, 1, "runner-1").await.unwrap();
+    // Complete
+    mark_completed(&db.pool, id).await.unwrap();
+    // Reset
+    let next = chrono::Utc::now() + chrono::Duration::seconds(60);
+    reset_recurring(&db.pool, id, next).await.unwrap();
+
+    let row: (String, i32, Option<String>) =
+        sqlx::query_as("SELECT status, attempts, locked_by FROM persistent_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "pending", "should be reset to pending");
+    assert_eq!(row.1, 0, "attempts should be reset to 0");
+    assert!(row.2.is_none(), "lock should be cleared");
+
+    // Verify same row ID (slot model)
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM persistent_jobs WHERE job_type = 'test.reset'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(count.0, 1, "should still be 1 row (slot model)");
+}
+
+// ── Runner-level recurring tests ───────────────────────────────────
+
+struct RecurringCountHandler {
+    invocations: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl JobHandler for RecurringCountHandler {
+    fn job_type(&self) -> &str {
+        "test.recurring-count"
+    }
+    async fn execute(&self, _payload: &Value, _pool: &PgPool) -> Result<(), JobError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct RecurringFailHandler {
+    invocations: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl JobHandler for RecurringFailHandler {
+    fn job_type(&self) -> &str {
+        "test.recurring-fail"
+    }
+    async fn execute(&self, _payload: &Value, _pool: &PgPool) -> Result<(), JobError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        Err(JobError::Transient("always fails".into()))
+    }
+}
+
+#[tokio::test]
+async fn recurring_end_to_end() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let count = Arc::new(AtomicU32::new(0));
+
+    let handler = RecurringCountHandler {
+        invocations: Arc::clone(&count),
+    };
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+    registry.register_recurring(RecurringJobDefinition {
+        job_name: jn("test.recurring-count"),
+        schedule: JobSchedule::Interval(Duration::from_secs(1)),
+        payload: json!({}),
+        dedup_key: "default".into(),
+        config: None,
+        failure_policy: RecurringFailurePolicy::Die,
+    });
+
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(7200),
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Wait for handler to be called at least twice (recurring cycle)
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if count.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("recurring handler should be called at least twice within 8s");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
+}
+
+#[tokio::test]
+async fn die_policy() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let count = Arc::new(AtomicU32::new(0));
+
+    let handler = RecurringFailHandler {
+        invocations: Arc::clone(&count),
+    };
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+    registry.register_recurring(RecurringJobDefinition {
+        job_name: jn("test.recurring-fail"),
+        schedule: JobSchedule::Interval(Duration::from_secs(1)),
+        payload: json!({}),
+        dedup_key: "default".into(),
+        config: Some(JobConfig {
+            max_retries: Some(1), // fail after 1 attempt
+            ..Default::default()
+        }),
+        failure_policy: RecurringFailurePolicy::Die,
+    });
+
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(7200),
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Wait for the job to exhaust retries
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let row: (String,) =
+        sqlx::query_as("SELECT status FROM persistent_jobs WHERE job_type = 'test.recurring-fail'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "failed", "Die policy: slot should be dead (failed)");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
+}
+
+#[tokio::test]
+async fn reset_to_next_policy() {
+    let db = TestDb::start(MIGRATIONS).await;
+    let count = Arc::new(AtomicU32::new(0));
+
+    let handler = RecurringFailHandler {
+        invocations: Arc::clone(&count),
+    };
+
+    let mut registry = JobRegistry::new();
+    registry.register(Arc::new(handler));
+    registry.register_recurring(RecurringJobDefinition {
+        job_name: jn("test.recurring-fail"),
+        schedule: JobSchedule::Interval(Duration::from_secs(60)),
+        payload: json!({}),
+        dedup_key: "default".into(),
+        config: Some(JobConfig {
+            max_retries: Some(1),
+            ..Default::default()
+        }),
+        failure_policy: RecurringFailurePolicy::ResetToNext,
+    });
+
+    let config = JobRunnerConfig {
+        poll_interval: Duration::from_millis(50),
+        stale_lock_check_interval: Duration::from_secs(3600),
+        stale_lock_timeout: Duration::from_secs(7200),
+        ..Default::default()
+    };
+
+    let runner = Arc::new(JobRunner::new(db.pool.clone(), registry, config));
+    let shutdown = CancellationToken::new();
+
+    let runner_handle = {
+        let r = Arc::clone(&runner);
+        let s = shutdown.clone();
+        tokio::spawn(async move { r.run(s).await })
+    };
+
+    // Wait for the job to exhaust retries and get reset
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let row: (String,) =
+        sqlx::query_as("SELECT status FROM persistent_jobs WHERE job_type = 'test.recurring-fail'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        row.0, "pending",
+        "ResetToNext policy: slot should be pending with future next_run_at"
+    );
+
+    // Verify next_run_at is in the future
+    let future: (bool,) = sqlx::query_as(
+        "SELECT next_run_at > NOW() FROM persistent_jobs WHERE job_type = 'test.recurring-fail'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(future.0, "next_run_at should be in the future");
+
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), runner_handle).await;
 }

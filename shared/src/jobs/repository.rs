@@ -1,8 +1,9 @@
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::jobs::types::{Job, JobConfig, JobName};
+use crate::jobs::types::{Job, JobConfig, JobName, RecurringJobDefinition};
 
 // ── Enqueue ────────────────────────────────────────────────────────
 
@@ -227,4 +228,79 @@ pub async fn cleanup_completed(
     .await
     .map_err(|e| AppError::InternalServerError(e.to_string()))?;
     Ok(result.rows_affected())
+}
+
+// ── Seed recurring job ─────────────────────────────────────────────
+
+/// Create the initial slot for a recurring job (D7, D12).
+///
+/// Uses `ON CONFLICT DO NOTHING` on the `(job_type, dedup_key)` unique partial
+/// index. Returns `Some(id)` if a new row was created, `None` if the slot
+/// already exists. Safe for concurrent multi-instance startup.
+pub async fn seed_recurring_job(
+    executor: impl sqlx::PgExecutor<'_>,
+    def: &RecurringJobDefinition,
+) -> Result<Option<Uuid>, AppError> {
+    let schedule_str = match &def.schedule {
+        crate::jobs::types::JobSchedule::Cron(s) => s.to_string(),
+        crate::jobs::types::JobSchedule::Interval(d) => format!("@every {}s", d.as_secs()),
+    };
+    let max_retries = def.config.as_ref().and_then(|c| c.max_retries).unwrap_or(5) as i32;
+    let timeout_seconds = def
+        .config
+        .as_ref()
+        .and_then(|c| c.timeout_seconds)
+        .unwrap_or(300) as i32;
+
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        r#"
+        INSERT INTO persistent_jobs (job_type, payload, schedule, dedup_key, max_retries, timeout_seconds)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (job_type, dedup_key) WHERE status IN ('pending', 'running') AND dedup_key IS NOT NULL
+        DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(def.job_name.as_str())
+    .bind(&def.payload)
+    .bind(&schedule_str)
+    .bind(&def.dedup_key)
+    .bind(max_retries)
+    .bind(timeout_seconds)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+    Ok(row.map(|r| r.0))
+}
+
+// ── Reset recurring ────────────────────────────────────────────────
+
+/// Reset a recurring job slot back to `pending` with a new `next_run_at` (D7).
+///
+/// Resets `attempts` to 0, clears lock and error. The row ID stays the same
+/// (slot model — no new rows created on each cycle).
+pub async fn reset_recurring(
+    executor: impl sqlx::PgExecutor<'_>,
+    job_id: Uuid,
+    next_run_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE persistent_jobs
+        SET status = 'pending',
+            next_run_at = $2,
+            attempts = 0,
+            locked_by = NULL,
+            locked_at = NULL,
+            last_error = NULL
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(next_run_at)
+    .execute(executor)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+    Ok(())
 }
